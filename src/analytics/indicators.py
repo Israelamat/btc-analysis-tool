@@ -1,0 +1,64 @@
+import numpy as np
+import pandas as pd
+
+from src.utils.logger import setup_logger
+
+logger = setup_logger()
+
+
+def _rsi(series: pd.Series, period: int = 14) -> float:
+    """Wilder's Relative Strength Index for the last value of a series."""
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+    last_avg_gain = float(avg_gain.iloc[-1])
+    last_avg_loss = float(avg_loss.iloc[-1])
+
+    if last_avg_loss == 0:
+        return 100.0
+    if last_avg_gain == 0:
+        return 0.0
+
+    rs = last_avg_gain / last_avg_loss
+    return float(100 - (100 / (1 + rs)))
+
+
+def calculate_technical_indicators(
+    df: pd.DataFrame, ema_period: int = 200, rsi_period: int = 14
+) -> dict:
+    """Compute the technical indicators used by the scoring model.
+
+    :param df: DataFrame with at least a 'close' column (from BTCFetcher)
+    :param ema_period: EMA period used as trend benchmark
+    :param rsi_period: RSI period
+    :return: dict with latest_price, ema_200 and rsi
+    """
+    if df is None or df.empty or "close" not in df.columns:
+        logger.warning("No data available to compute technical indicators")
+        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0}
+
+    close = pd.to_numeric(df["close"], errors="coerce").dropna()
+    if close.empty:
+        logger.warning("Close prices are not valid")
+        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0}
+
+    latest_price = float(close.iloc[-1])
+    ema_200 = float(close.ewm(span=ema_period, adjust=False).mean().iloc[-1])
+
+    try:
+        rsi = _rsi(close, rsi_period)
+        if np.isnan(rsi):
+            rsi = 50.0
+    except Exception:
+        rsi = 50.0
+        logger.warning("Failed to compute RSI, using neutral value 50")
+
+    logger.info(
+        f"Indicators: price={latest_price:.2f} "
+        f"EMA{ema_period}={ema_200:.2f} RSI{rsi_period}={rsi:.2f}"
+    )
+    return {"latest_price": latest_price, "ema_200": ema_200, "rsi": round(rsi, 2)}

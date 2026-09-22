@@ -4,11 +4,17 @@ env/
 ENV/
 
 .env
+.env.*
+!.env.example
 *.key
 
 __pycache__/
 *.py[cod]
 *$py.class
+
+data/
+logs/
+*.db
 
 .ipynb_checkpoints
 
