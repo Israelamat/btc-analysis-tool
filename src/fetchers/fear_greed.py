@@ -16,7 +16,8 @@ class FearGreedFetcher(BaseFetcher):
     def fetch_data(self, limit: int = 1) -> list[dict]:
         """Get Fear & Greed Index data.
 
-        :param limit: Number of items to fetch 
+        :param limit: Number of items to fetch. Use 0 to get the full
+            available history (back to 2018-02-01).
         return list[dict]: List of Fear & Greed Index data
         """
         params = {"limit": limit, "format": "json"}
@@ -48,10 +49,11 @@ class FearGreedFetcher(BaseFetcher):
         )
         return 50
 
-    def get_history(self, limit: int = 365) -> list[dict]:
+    def get_history(self, limit: int = 0) -> list[dict]:
         """Return the Fear & Greed history as date/value/classification dicts.
 
-        :param limit: Number of historical items to fetch
+        :param limit: Number of historical items to fetch; 0 returns the
+            full available history (back to 2018-02-01)
         :return: List of dicts with date (YYYY-MM-DD), value (int) and
             classification (str)
         """

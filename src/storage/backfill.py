@@ -1,3 +1,4 @@
+import json
 import sys
 
 import pandas as pd
@@ -28,8 +29,8 @@ def backfill_btc(db: DatabaseManager) -> None:
 
 
 def backfill_fear_greed(db: DatabaseManager) -> None:
-    """Fetch the Fear & Greed history and store it in SQLite."""
-    rows = FearGreedFetcher().get_history(limit=365)
+    """Fetch the full Fear & Greed history and store it in SQLite."""
+    rows = FearGreedFetcher().get_history(limit=0)
     if not rows:
         logger.warning("No Fear & Greed data to backfill")
         return
@@ -59,7 +60,7 @@ def backfill_google_trends(db: DatabaseManager, keyword: str = "bitcoin") -> Non
 
 def backfill_stocks(db: DatabaseManager) -> None:
     """Fetch SP500 / NASDAQ / DXY daily history and store it in SQLite."""
-    df = StockIndicesFetcher().get_history(range_period="1y")
+    df = StockIndicesFetcher().get_history(range_period="10y")
     if df.empty:
         logger.warning("No stock index history to backfill")
         return
@@ -87,7 +88,7 @@ def _asof(frame: pd.DataFrame, column: str, dates: pd.DatetimeIndex) -> pd.Serie
 def backfill_scores(db: DatabaseManager) -> None:
     """Backfill daily accumulation scores from the stored history.
 
-    Each date needs real BTC indicators and Fear & Greed data; DXY and
+    Each date needs real BTC indicators and M2 data; Fear & Greed, DXY and
     Google Trends fall back to neutral when unavailable.
     """
     indicators = db.load_btc_indicators()
@@ -111,7 +112,7 @@ def backfill_scores(db: DatabaseManager) -> None:
     sp500 = _asof(stocks, "sp500", dates)
     nasdaq = _asof(stocks, "nasdaq", dates)
 
-    fear_greed_val = _asof(fear_greed, "value", dates)
+    fear_greed_val = _asof(fear_greed, "value", dates).fillna(50.0)
     google_trends_val = _asof(trends, "value", dates).fillna(50.0)
 
     m2_series = fred.dropna(subset=["value"]).set_index("date")["value"].sort_index()
@@ -120,9 +121,8 @@ def backfill_scores(db: DatabaseManager) -> None:
     m2_yoy = pd.Series((latest.to_numpy() / base.to_numpy() - 1) * 100, index=dates)
 
     dxy_series = stocks.dropna(subset=["dxy"]).set_index("date")["dxy"].sort_index()
-    dxy_current = dxy_series.reindex(dates, method="ffill")
-    dxy_reference = dxy_series.shift(5).reindex(dates, method="ffill")
-    change_pct = (dxy_current / dxy_reference - 1) * 100
+    dxy_on_dates = dxy_series.reindex(dates, method="ffill")
+    change_pct = (dxy_on_dates / dxy_on_dates.shift(5) - 1) * 100
     dxy_trend = pd.Series("neutral", index=dates)
     dxy_trend[change_pct > 0.5] = "bullish"
     dxy_trend[change_pct < -0.5] = "bearish"
@@ -142,7 +142,7 @@ def backfill_scores(db: DatabaseManager) -> None:
             "dxy": dxy_trend,
         }
     )
-    frame = frame.dropna(subset=["ema_200", "rsi_14", "fear_greed", "m2_yoy"])
+    frame = frame.dropna(subset=["ema_200", "rsi_14", "m2_yoy"])
 
     scorer = BTCAcumulationScorer()
     saved = 0
@@ -171,6 +171,10 @@ def backfill_scores(db: DatabaseManager) -> None:
                 "macd_hist": round(float(row["macd_hist"]), 4),
                 "google_trends": round(float(row["google_trends"]), 2),
                 "total_score": result["score"],
+                "zone": result["zone"],
+                "components": json.dumps(
+                    result["components"], ensure_ascii=False
+                ),
             }
         )
         saved += 1

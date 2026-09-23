@@ -1,5 +1,8 @@
 import argparse
+import json
 from datetime import datetime
+
+import pandas as pd
 
 from src.analytics.indicators import calculate_technical_indicators
 from src.analytics.scoring import BTCAcumulationScorer
@@ -30,6 +33,20 @@ def run_pipeline():
     logger.info("Calculating technical indicators...")
     tech_data = calculate_technical_indicators(btc_df)
 
+    # Prefer indicators computed from the full stored history (backfill) so the
+    # "today" score is consistent with the historical series. Fall back to the
+    # fresh fetch calculation (250 candles) when the DB has no matching row.
+    db = DatabaseManager()
+    stored_indicators = db.load_btc_indicators()
+    if not stored_indicators.empty:
+        last_row = stored_indicators.iloc[-1]
+        stored_date = pd.to_datetime(last_row["date"]).date()
+        if str(stored_date) == str(tech_data.get("latest_date")):
+            tech_data["ema_200"] = float(last_row["ema_200"])
+            tech_data["rsi"] = float(last_row["rsi_14"])
+            tech_data["macd_hist"] = float(last_row["macd_hist"])
+            logger.info("Using indicators from full stored history")
+
     logger.info("Calculating score...")
     scorer = BTCAcumulationScorer()
     score_result = scorer.calculate(
@@ -56,10 +73,11 @@ def run_pipeline():
         "macd_hist": tech_data["macd_hist"],
         "google_trends": google_trends_val,
         "total_score": score_result["score"],
+        "zone": score_result["zone"],
+        "components": json.dumps(score_result["components"], ensure_ascii=False),
     }
 
     logger.info("Saving results to database...")
-    db = DatabaseManager()
     db.save_daily_metrics(today_record)
 
     logger.info("=== Resumen del Análisis ===")

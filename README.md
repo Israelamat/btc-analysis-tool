@@ -91,15 +91,26 @@ Public market dashboards are black boxes. This one is **yours**:
 
 A weighted composite of tradable signals, normalized to **0–100**, giving a read of how attractive the current market setup is:
 
+> ⚙️ Weights were **calibrated empirically** against 8+ years of BTC forward returns (see [Backtesting & Calibration](#-backtesting--calibration)). The classic dip-buying signals (Fear & Greed, RSI oversold, below-EMA-200) proved *noise-to-negative* at a 90-day horizon, while retail disinterest (Google Trends) and momentum carry real signal.
+
 | Signal | Weight | Logic |
 |-------:|-------:|-------|
-| EMA-200 | 25% | Price vs. long-term trend |
-| M2 money supply | 20% | Liquidity conditions |
-| Fear & Greed | 20% | Market sentiment extremes |
-| RSI-14 | 15% | Momentum / overbought–oversold |
+| Google Trends | 60% | Retail disinterest ⇒ accumulation (strongest signal) |
+| MACD histogram | 16% | Momentum / trend reversal |
 | DXY trend | 10% | Dollar strength vs. risk assets |
-| MACD histogram | 5% | Momentum / trend reversal |
-| Google Trends | 5% | Retail interest (contrarian) |
+| M2 money supply | 5% | Liquidity conditions |
+| EMA-200 | 4% | Price vs. long-term trend |
+| Fear & Greed | 3% | Market sentiment |
+| RSI-14 | 2% | Momentum / overbought–oversold |
+
+### Zones
+
+| Zone | Score | Mean 90d return (2017→2026) | Win rate |
+|------|-------:|------------------------------:|---------:|
+| **High accumulation** | ≥ 70 | +35.2% | 63.6% |
+| **Moderate accumulation** | 50–69 | +15.0% | 56.0% |
+| **Neutral** | 30–49 | +0.9% | 44.8% |
+| **Not a good zone** | < 30 | −11.5% | 31.2% |
 
 ---
 
@@ -120,8 +131,7 @@ source venv/bin/activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure environment (FRED key optional)
-cp .env.example .env
+# 4. (Optional) Create a `.env` with your FRED API key (needed for M2 data)
 ```
 
 ---
@@ -151,6 +161,18 @@ python -m src.fetchers stock_indices
 
 > ⚙️ Edit `TARGET = "all"` in `src/fetchers/__init__.py` to choose the default fetcher tested.
 
+### Historical data & backfill
+
+```bash
+# Full backfill: BTC, Fear & Greed, M2, Google Trends, stock indices (+ scores)
+python -m src.storage.backfill all
+
+# Or a single target: btc | fear_greed | fred_m2 | google_trends |
+#                     stock_indices | indicators | scores
+python -m src.storage.backfill stock_indices
+python -m src.storage.backfill scores
+```
+
 ### Sample output
 
 ```
@@ -163,14 +185,53 @@ python -m src.fetchers stock_indices
 
 ---
 
+## 📊 Backtesting & Calibration
+
+The score is validated against history, not vibes. For every day with a stored score
+it computes the BTC return **7 / 30 / 90 days later** and groups it by zone, so the
+"buy cheap" hypothesis can be checked empirically.
+
+```bash
+# Run the backtest (uses stored metrics_history + btc_klines)
+python -m src.analytics.backtest
+
+# Save the per-day details to CSV
+python -m src.analytics.backtest --csv backtest.csv
+```
+
+`src/analytics/calibrate.py` measures how much each component actually predicts
+forward returns (per signal and per score bin) — the tool used to set the current weights:
+
+```bash
+python -m src.analytics.calibrate
+```
+
+### Historical depth
+
+| Source | Goes back to |
+|--------|--------------|
+| BTC/USDT (Binance) | 2017-08-17 (pair listing) |
+| Fear & Greed (Alternative.me) | 2018-02-01 (index launch) |
+| S&P 500 · NASDAQ · DXY (Yahoo) | 2016-09 (10y range) |
+| M2 (FRED) | 1959 |
+| Google Trends | 2017-08 (monthly resolution beyond ~5y) |
+
+Days before 2018-02-01 score with a neutral Fear & Greed value (50); the MA/RSI
+indicators need ~200 trading days to warm up. Regenerate the whole history with
+`python -m src.storage.backfill scores`.
+
+---
+
 ## 🗺️ Roadmap
 
 From data acquisition pipeline → **your personalized multi-layer market dashboard**.
 
 ### ✅ Done
 - [x] Modular fetchers for BTC, Fear & Greed, M2, and stock indices
-- [x] EMA-200 & RSI technical indicators
+- [x] EMA-200, RSI-14 & MACD technical indicators
 - [x] Composite market scoring engine
+- [x] **Backtest validation of the score vs forward returns (8+ years)**
+- [x] **Data-driven weight & zone calibration**
 - [x] SQLite persistence with daily history
 - [x] Standalone fetcher testing via CLI
 - [x] Public README & project scaffolding
@@ -234,8 +295,10 @@ btc-analysis-tool/
 └── src/
     ├── config.py               # Env-driven configuration
     ├── analytics/
-    │   ├── indicators.py       # EMA-200, RSI-14
-    │   └── scoring.py          # Composite market scoring engine
+    │   ├── indicators.py       # EMA-200, RSI-14, MACD
+    │   ├── scoring.py          # Composite market scoring engine
+    │   ├── backtest.py         # Forward-return validation by score zone
+    │   └── calibrate.py        # Per-signal predictive-power diagnostics
     ├── fetchers/
     │   ├── base.py             # HTTP helper (headers, timeout, errors)
     │   ├── btc_binance.py      # Binance klines

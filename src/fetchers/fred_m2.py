@@ -14,7 +14,7 @@ class FREDFetcher(BaseFetcher):
     BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
     SERIES_ID = "M2SL"
 
-    def fetch_data(self, series_id: str = SERIES_ID, limit: int = 400) -> list[dict]:
+    def fetch_data(self, series_id: str = SERIES_ID, limit: int = 20000) -> list[dict]:
         """Fetch observations for a FRED series.
 
         Only observations with a numeric value are returned.
@@ -84,7 +84,7 @@ class FREDFetcher(BaseFetcher):
         return round(float(yoy), 2)
 
     def get_history(
-        self, series_id: str = SERIES_ID, limit: int = 400
+        self, series_id: str = SERIES_ID, limit: int = 20000
     ) -> list[dict]:
         """Return the observations for a FRED series as date/value dicts.
 

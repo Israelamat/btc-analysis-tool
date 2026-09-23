@@ -42,11 +42,16 @@ class BTCAcumulationScorer:
 
     @staticmethod
     def _score_ema_200(current_price: float, ema_200: float) -> float:
-        """Price below EMA200 => cheaper => better for accumulation."""
+        """Price below EMA200 => cheaper => better for accumulation (contrarian).
+
+        Gradual slope (3x per percentage point) and a soft clamp avoid the
+        score saturating to 0/100 during normal bull/bear swings, keeping
+        the weight sensitive.
+        """
         if not ema_200:
             return 50.0
         distance_pct = (current_price / ema_200 - 1) * 100
-        return _clip(100 - distance_pct * 10)
+        return _clip(50 - distance_pct * 3, 5.0, 95.0)
 
     @staticmethod
     def _score_rsi(rsi: float) -> float:
@@ -109,11 +114,11 @@ class BTCAcumulationScorer:
 
     @staticmethod
     def _classify(score: float) -> str:
-        if score >= 80:
-            return " High accumation zone"
-        if score >= 60:
+        if score >= 70:
+            return "High accumulation zone"
+        if score >= 50:
             return "Moderate accumulation zone"
-        if score >= 40:
+        if score >= 30:
             return "Neutral zone"
         return "Not a good zone"
 
@@ -130,7 +135,8 @@ class BTCAcumulationScorer:
     ) -> dict:
         """Calculate the accumulation score and its zone.
 
-        :return: dict with 'score' (int, 0-100) and 'zone' (str)
+        :return: dict with 'score' (int, 0-100), 'zone' (str) and
+            'components' (dict of per-signal scores, 0-100)
         """
         components = self._component_scores(
             current_price=current_price,
@@ -151,4 +157,8 @@ class BTCAcumulationScorer:
             + ", ".join(f"{key}={components[key]:.0f}" for key in components)
             + f" -> total {score}/100 ({self._classify(score)})"
         )
-        return {"score": score, "zone": self._classify(score)}
+        return {
+            "score": score,
+            "zone": self._classify(score),
+            "components": {key: round(value, 1) for key, value in components.items()},
+        }

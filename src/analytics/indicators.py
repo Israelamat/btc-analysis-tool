@@ -35,18 +35,33 @@ def calculate_technical_indicators(
     :param df: DataFrame with at least a 'close' column (from BTCFetcher)
     :param ema_period: EMA period used as trend benchmark
     :param rsi_period: RSI period
-    :return: dict with latest_price, ema_200 and rsi
+    :return: dict with latest_price, latest_date, ema_200, rsi and macd_hist
     """
     if df is None or df.empty or "close" not in df.columns:
         logger.warning("No data available to compute technical indicators")
-        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0, "macd_hist": 0.0}
+        return {
+            "latest_price": 0.0,
+            "latest_date": None,
+            "ema_200": 0.0,
+            "rsi": 50.0,
+            "macd_hist": 0.0,
+        }
 
     close = pd.to_numeric(df["close"], errors="coerce").dropna()
     if close.empty:
         logger.warning("Close prices are not valid")
-        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0, "macd_hist": 0.0}
+        return {
+            "latest_price": 0.0,
+            "latest_date": None,
+            "ema_200": 0.0,
+            "rsi": 50.0,
+            "macd_hist": 0.0,
+        }
 
     latest_price = float(close.iloc[-1])
+    latest_date = (
+        str(df["date"].iloc[-1]) if "date" in df.columns else None
+    )
     ema_200 = float(close.ewm(span=ema_period, adjust=False).mean().iloc[-1])
 
     try:
@@ -74,6 +89,7 @@ def calculate_technical_indicators(
     )
     return {
         "latest_price": latest_price,
+        "latest_date": latest_date,
         "ema_200": ema_200,
         "rsi": round(rsi, 2),
         "macd_hist": round(macd_hist, 4),

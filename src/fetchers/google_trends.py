@@ -55,6 +55,13 @@ class GoogleTrendsFetcher(BaseFetcher):
             logger.warning(f"No Google Trends data for [{keyword}]")
             return pd.DataFrame(columns=["date", "value"])
 
+        if "isPartial" in df.columns:
+            df = df[~df["isPartial"].fillna(False)]
+
+        if df.empty:
+            logger.warning(f"No completed Google Trends data for [{keyword}]")
+            return pd.DataFrame(columns=["date", "value"])
+
         df = df[[keyword]].copy()
         df.columns = ["value"]
         df.index.name = "date"

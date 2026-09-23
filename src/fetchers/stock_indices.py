@@ -134,7 +134,7 @@ class StockIndicesFetcher(BaseFetcher):
         series.index = series.index.date
         return series[~series.index.duplicated(keep="last")]
 
-    def get_history(self, range_period: str = "1y") -> pd.DataFrame:
+    def get_history(self, range_period: str = "10y") -> pd.DataFrame:
         """Return aligned daily closes for SP500, NASDAQ and DXY.
 
         :param range_period: Yahoo Finance lookback, e.g. "1y" or "2y"

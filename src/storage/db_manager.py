@@ -44,7 +44,9 @@ class DatabaseManager:
                     dxy TEXT,
                     macd_hist REAL,
                     google_trends REAL,
-                    total_score REAL
+                    total_score REAL,
+                    zone TEXT,
+                    components TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS btc_klines (
@@ -94,7 +96,13 @@ class DatabaseManager:
             """
             )
             columns = [row[1] for row in cursor.execute("PRAGMA table_info(metrics_history)")]
-            for column, kind in (("dxy", "TEXT"), ("macd_hist", "REAL"), ("google_trends", "REAL")):
+            for column, kind in (
+                ("dxy", "TEXT"),
+                ("macd_hist", "REAL"),
+                ("google_trends", "REAL"),
+                ("zone", "TEXT"),
+                ("components", "TEXT"),
+            ):
                 if column not in columns:
                     cursor.execute(f"ALTER TABLE metrics_history ADD COLUMN {column} {kind}")
             conn.commit()
@@ -102,8 +110,8 @@ class DatabaseManager:
     def save_daily_metrics(self, data: dict):
         """Save metrics data to the database (upsert by date)."""
         query = """
-            INSERT INTO metrics_history (date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, sp500, nasdaq, dxy, macd_hist, google_trends, total_score)
-            VALUES (:date, :btc_price, :ema_200, :rsi_14, :fear_greed, :m2_yoy, :sp500, :nasdaq, :dxy, :macd_hist, :google_trends, :total_score)
+            INSERT INTO metrics_history (date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, sp500, nasdaq, dxy, macd_hist, google_trends, total_score, zone, components)
+            VALUES (:date, :btc_price, :ema_200, :rsi_14, :fear_greed, :m2_yoy, :sp500, :nasdaq, :dxy, :macd_hist, :google_trends, :total_score, :zone, :components)
             ON CONFLICT(date) DO UPDATE SET
                 btc_price=excluded.btc_price,
                 ema_200=excluded.ema_200,
@@ -115,7 +123,9 @@ class DatabaseManager:
                 dxy=excluded.dxy,
                 macd_hist=excluded.macd_hist,
                 google_trends=excluded.google_trends,
-                total_score=excluded.total_score;
+                total_score=excluded.total_score,
+                zone=excluded.zone,
+                components=excluded.components;
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -125,6 +135,12 @@ class DatabaseManager:
     def load_latest_metrics(self, limit: int = 30) -> pd.DataFrame:
         with self._get_connection() as conn:
             query = f"SELECT * FROM metrics_history ORDER BY date DESC LIMIT {limit}"
+            return pd.read_sql_query(query, conn)
+
+    def load_metrics_history(self) -> pd.DataFrame:
+        """Load the full metrics history ordered by date."""
+        with self._get_connection() as conn:
+            query = "SELECT * FROM metrics_history ORDER BY date"
             return pd.read_sql_query(query, conn)
 
     @staticmethod
