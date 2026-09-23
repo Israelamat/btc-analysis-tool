@@ -73,3 +73,52 @@ class BTCFetcher(BaseFetcher):
             f"Fetched {len(df)} daily candles for BTC up to {df['date'].iloc[-1]}"
         )
         return df[["date", "open", "high", "low", "close", "volume"]]
+
+    def get_full_history(self, chunk: int = 1000) -> pd.DataFrame:
+        """Return the complete BTC/USDT daily history from Binance.
+
+        Binance caps each request at ``chunk`` candles, so the history is
+        paginated with ``startTime`` until all candles are retrieved.
+
+        :param chunk: Max candles per request (Binance cap is 1000)
+        :return: DataFrame with columns date, open, high, low, close, volume
+        """
+        frames = []
+        start_time = 0
+        while True:
+            params = {
+                "symbol": "BTCUSDT",
+                "interval": "1d",
+                "limit": chunk,
+                "startTime": start_time,
+            }
+            try:
+                response = self._make_request(self.BASE_URL, params=params)
+            except requests.exceptions.RequestException:
+                logger.error("Failed to fetch BTC full history from Binance")
+                break
+
+            if not isinstance(response, list) or not response:
+                break
+
+            frames.append(pd.DataFrame(response))
+            if len(response) < chunk:
+                break
+            start_time = int(response[-1][0]) + 1
+
+        if not frames:
+            logger.warning("Returning empty DataFrame (no BTC full history)")
+            return pd.DataFrame(
+                columns=["date", "open", "high", "low", "close", "volume"]
+            )
+
+        df = pd.concat(frames, ignore_index=True).iloc[:, :6]
+        df.columns = KLINE_COLUMNS
+        df["date"] = pd.to_datetime(df["open_time"], unit="ms").dt.date
+        for col in ["open", "high", "low", "close", "volume"]:
+            df[col] = df[col].astype(float)
+
+        logger.info(
+            f"Fetched {len(df)} daily candles for BTC up to {df['date'].iloc[-1]}"
+        )
+        return df[["date", "open", "high", "low", "close", "volume"]]

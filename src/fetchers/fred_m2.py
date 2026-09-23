@@ -82,3 +82,20 @@ class FREDFetcher(BaseFetcher):
         yoy = (latest["value"] / year_ago_value - 1) * 100
         logger.info(f"M2 YoY growth: {yoy:.2f}% (as of {latest['date'].date()})")
         return round(float(yoy), 2)
+
+    def get_history(
+        self, series_id: str = SERIES_ID, limit: int = 400
+    ) -> list[dict]:
+        """Return the observations for a FRED series as date/value dicts.
+
+        :param series_id: FRED series id, e.g. M2SL (M2 money stock)
+        :param limit: Number of observations to fetch (descending order)
+        :return: List of dicts with date (YYYY-MM-DD) and value (float)
+        """
+        observations = self.fetch_data(series_id=series_id, limit=limit)
+        rows = [
+            {"date": obs["date"], "value": float(obs["value"])}
+            for obs in observations
+        ]
+        logger.info(f"Fetched {len(rows)} observations for FRED [{series_id}]")
+        return rows

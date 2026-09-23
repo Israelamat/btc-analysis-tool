@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from src.fetchers.base import BaseFetcher
 from src.utils.logger import setup_logger
 
@@ -39,3 +41,26 @@ class FearGreedFetcher(BaseFetcher):
             "Using default value for Fear & Greed Index (50) since no data was found"
         )
         return 50
+
+    def get_history(self, limit: int = 365) -> list[dict]:
+        """Return the Fear & Greed history as date/value/classification dicts.
+
+        :param limit: Number of historical items to fetch
+        :return: List of dicts with date (YYYY-MM-DD), value (int) and
+            classification (str)
+        """
+        data = self.fetch_data(limit=limit)
+        rows = []
+        for item in data:
+            timestamp = item.get("timestamp")
+            if not timestamp:
+                continue
+            rows.append(
+                {
+                    "date": datetime.fromtimestamp(int(timestamp)).strftime("%Y-%m-%d"),
+                    "value": int(item["value"]),
+                    "classification": item.get("value_classification"),
+                }
+            )
+        logger.info(f"Fetched {len(rows)} Fear & Greed history records")
+        return rows

@@ -1,5 +1,6 @@
 import time
 
+import pandas as pd
 import requests
 
 from src.fetchers.base import BaseFetcher
@@ -29,7 +30,9 @@ class StockIndicesFetcher(BaseFetcher):
         "DXY": "DX-Y.NYB",
     }
 
-    def fetch_data(self, symbol: str, interval: str = "1d") -> dict | None:
+    def fetch_data(
+        self, symbol: str, interval: str = "1d", range_period: str = "1mo"
+    ) -> dict | None:
         """Fetch the chart payload for a single Yahoo Finance symbol."""
         last_error = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -38,7 +41,7 @@ class StockIndicesFetcher(BaseFetcher):
                 try:
                     response = self._make_request(
                         f"{url}/{symbol}",
-                        params={"range": "1mo", "interval": interval},
+                        params={"range": range_period, "interval": interval},
                     )
                     result = (response.get("chart") or {}).get("result") or []
                     if result:
@@ -109,3 +112,49 @@ class StockIndicesFetcher(BaseFetcher):
             f"DXY_trend={result['DXY_trend']}"
         )
         return result
+
+    @staticmethod
+    def _history_chart(chart: dict) -> pd.Series:
+        """Extract timestamp-aligned closes as a Series indexed by date."""
+        timestamps = chart.get("timestamp") or []
+        closes = (
+            (chart.get("indicators") or {})
+            .get("quote", [{}])[0]
+            .get("close") or []
+        )
+        if not timestamps or not closes:
+            return pd.Series(dtype="float64")
+        dates = pd.to_datetime(timestamps, unit="s")
+        series = pd.Series(closes, index=dates, dtype="float64")
+        series = series[series.notna()]
+        series.index = series.index.date
+        return series[~series.index.duplicated(keep="last")]
+
+    def get_history(self, range_period: str = "1y") -> pd.DataFrame:
+        """Return aligned daily closes for SP500, NASDAQ and DXY.
+
+        :param range_period: Yahoo Finance lookback, e.g. "1y" or "2y"
+        :return: DataFrame with date, sp500, nasdaq and dxy columns
+        """
+        frames = {}
+        for key, symbol in self.TICKERS.items():
+            chart = self.fetch_data(symbol, range_period=range_period)
+            if chart is None:
+                logger.warning(f"No history chart for [{symbol}]")
+                continue
+            series = self._history_chart(chart)
+            if series.empty:
+                logger.warning(f"No closes in history for [{symbol}]")
+                continue
+            series.name = key
+            frames[key] = series
+
+        if not frames:
+            logger.warning("No stock index history fetched")
+            return pd.DataFrame(columns=["date", "sp500", "nasdaq", "dxy"])
+
+        df = pd.DataFrame(frames)
+        df.index.name = "date"
+        df = df.astype(float).round(2).reset_index()
+        logger.info(f"Fetched {len(df)} stock index daily rows (incl. DXY)")
+        return df

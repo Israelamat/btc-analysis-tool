@@ -48,6 +48,7 @@ def run_pipeline():
         "m2_yoy": m2_growth,
         "sp500": stocks_data.get("SP500"),
         "nasdaq": stocks_data.get("NASDAQ"),
+        "dxy": stocks_data.get("DXY_trend", "neutral"),
         "total_score": score_result["score"],
     }
 

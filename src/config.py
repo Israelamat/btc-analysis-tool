@@ -7,6 +7,7 @@ load_dotenv()
 class Config:
     FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
     DB_PATH: str = os.getenv("DB_PATH", "data/macro_crypto.db")
+    START_DATE: str = os.getenv("START_DATE", "2017-08-01")
 
     SCORE_WEIGHTS = {
         "ema_200": 0.30,

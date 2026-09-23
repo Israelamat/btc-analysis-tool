@@ -4,6 +4,7 @@ from .base import BaseFetcher
 from .btc_binance import BTCFetcher
 from .fear_greed import FearGreedFetcher
 from .fred_m2 import FREDFetcher
+from .google_trends import GoogleTrendsFetcher
 from .stock_indices import StockIndicesFetcher
 
 __all__ = [
@@ -11,6 +12,7 @@ __all__ = [
     "BTCFetcher",
     "FearGreedFetcher",
     "FREDFetcher",
+    "GoogleTrendsFetcher",
     "StockIndicesFetcher",
 ]
 
@@ -20,7 +22,8 @@ TARGET = "all"
 def run_fetcher_test(target: str = TARGET) -> None:
     """Test the fetchers selected by target.
 
-    Target can be: "all" | "btc" | "fear_greed" | "fred_m2" | "stock_indices"
+    Target can be: "all" | "btc" | "fear_greed" | "fred_m2" |
+    "google_trends" | "stock_indices"
     """
     target = target.lower()
 
@@ -45,6 +48,13 @@ def run_fetcher_test(target: str = TARGET) -> None:
     if target in ("all", "stock_indices"):
         stocks = StockIndicesFetcher().get_major_indices()
         print(f"[+] Stocks: {stocks}")
+        print()
+
+    if target in ("all", "google_trends"):
+        trends = GoogleTrendsFetcher().get_history(years=1)
+        print(f"[+] Google Trends: {len(trends)} records")
+        if trends:
+            print(f"    Last={trends[-1]}")
         print()
 
 

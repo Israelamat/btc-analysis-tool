@@ -62,3 +62,52 @@ def calculate_technical_indicators(
         f"EMA{ema_period}={ema_200:.2f} RSI{rsi_period}={rsi:.2f}"
     )
     return {"latest_price": latest_price, "ema_200": ema_200, "rsi": round(rsi, 2)}
+
+
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def _rsi_series(series: pd.Series, period: int = 14) -> pd.Series:
+    """Wilder's RSI computed for the whole series."""
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+    rsi = 100 - (100 / (1 + avg_gain / avg_loss))
+    rsi = rsi.where(avg_loss != 0, 100.0)
+    rsi = rsi.mask((avg_gain == 0) & (avg_loss != 0), 0.0)
+    return rsi
+
+
+def calculate_indicator_series(
+    df: pd.DataFrame, ema_period: int = 200, rsi_period: int = 14
+) -> pd.DataFrame:
+    """Compute EMA-200, RSI-14 and MACD series for every kline.
+
+    :param df: DataFrame with at least a 'close' column (from BTCFetcher)
+    :param ema_period: EMA period used as trend benchmark
+    :param rsi_period: RSI period
+    :return: DataFrame with date, ema_200, rsi_14, macd, macd_signal, macd_hist
+    """
+    columns = ["date", "ema_200", "rsi_14", "macd", "macd_signal", "macd_hist"]
+    if df is None or df.empty or "close" not in df.columns:
+        logger.warning("No data available to compute indicator series")
+        return pd.DataFrame(columns=columns)
+
+    close = pd.to_numeric(df["close"], errors="coerce")
+    out = pd.DataFrame({"date": df["date"]})
+
+    out["ema_200"] = _ema(close, ema_period)
+    out["rsi_14"] = _rsi_series(close, rsi_period)
+
+    macd = _ema(close, 12) - _ema(close, 26)
+    out["macd"] = macd
+    out["macd_signal"] = _ema(macd, 9)
+    out["macd_hist"] = out["macd"] - out["macd_signal"]
+
+    logger.info(f"Computed {len(out)} rows of indicator series")
+    return out[columns]

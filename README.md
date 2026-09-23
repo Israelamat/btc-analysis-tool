@@ -83,6 +83,7 @@ Public market dashboards are black boxes. This one is **yours**:
 | **Alternative.me** | Fear & Greed Index | `FearGreedFetcher` | none |
 | **FRED (St. Louis Fed)** | M2 money supply (YoY growth) | `FREDFetcher` | [free API key](https://fred.stlouisfed.org/docs/api/api_key.html) |
 | **Yahoo Finance** | S&P 500, NASDAQ, DXY trend | `StockIndicesFetcher` | none |
+| **Google Trends** | Search interest for "bitcoin" | `GoogleTrendsFetcher` | none |
 
 ---
 
@@ -238,8 +239,10 @@ btc-analysis-tool/
     │   ├── btc_binance.py      # Binance klines
     │   ├── fear_greed.py       # Fear & Greed Index
     │   ├── fred_m2.py          # FRED M2 money supply
+    │   ├── google_trends.py    # Google Trends search interest
     │   └── stock_indices.py    # S&P 500, NASDAQ, DXY
     └── storage/
+        ├── backfill.py         # Historical data backfill CLI
         └── db_manager.py       # SQLite persistence
 ```
 
