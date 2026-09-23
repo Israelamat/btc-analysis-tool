@@ -10,9 +10,11 @@ class Config:
     START_DATE: str = os.getenv("START_DATE", "2017-08-01")
 
     SCORE_WEIGHTS = {
-        "ema_200": 0.30,
+        "ema_200": 0.25,
         "m2": 0.20,
         "fear_greed": 0.20,
         "rsi": 0.15,
-        "dxy": 0.15,
+        "dxy": 0.10,
+        "macd": 0.05,
+        "google_trends": 0.05,
     }

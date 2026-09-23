@@ -1,4 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
+
+import requests
 
 from src.fetchers.base import BaseFetcher
 from src.utils.logger import setup_logger
@@ -18,7 +20,11 @@ class FearGreedFetcher(BaseFetcher):
         return list[dict]: List of Fear & Greed Index data
         """
         params = {"limit": limit, "format": "json"}
-        response = self._make_request(self.BASE_URL, params=params)
+        try:
+            response = self._make_request(self.BASE_URL, params=params)
+        except requests.exceptions.RequestException:
+            logger.error("Failed to fetch Fear & Greed data")
+            return []
 
         if "data" in response and len(response["data"]) > 0:
             return response["data"]
@@ -57,7 +63,9 @@ class FearGreedFetcher(BaseFetcher):
                 continue
             rows.append(
                 {
-                    "date": datetime.fromtimestamp(int(timestamp)).strftime("%Y-%m-%d"),
+                    "date": datetime.fromtimestamp(
+                        int(timestamp), tz=timezone.utc
+                    ).strftime("%Y-%m-%d"),
                     "value": int(item["value"]),
                     "classification": item.get("value_classification"),
                 }

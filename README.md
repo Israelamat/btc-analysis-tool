@@ -93,11 +93,13 @@ A weighted composite of tradable signals, normalized to **0–100**, giving a re
 
 | Signal | Weight | Logic |
 |-------:|-------:|-------|
-| EMA-200 | 30% | Price vs. long-term trend |
+| EMA-200 | 25% | Price vs. long-term trend |
 | M2 money supply | 20% | Liquidity conditions |
 | Fear & Greed | 20% | Market sentiment extremes |
 | RSI-14 | 15% | Momentum / overbought–oversold |
-| DXY trend | 15% | Dollar strength vs. risk assets |
+| DXY trend | 10% | Dollar strength vs. risk assets |
+| MACD histogram | 5% | Momentum / trend reversal |
+| Google Trends | 5% | Retail interest (contrarian) |
 
 ---
 

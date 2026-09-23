@@ -42,6 +42,8 @@ class DatabaseManager:
                     sp500 REAL,
                     nasdaq REAL,
                     dxy TEXT,
+                    macd_hist REAL,
+                    google_trends REAL,
                     total_score REAL
                 );
 
@@ -92,15 +94,16 @@ class DatabaseManager:
             """
             )
             columns = [row[1] for row in cursor.execute("PRAGMA table_info(metrics_history)")]
-            if "dxy" not in columns:
-                cursor.execute("ALTER TABLE metrics_history ADD COLUMN dxy TEXT")
+            for column, kind in (("dxy", "TEXT"), ("macd_hist", "REAL"), ("google_trends", "REAL")):
+                if column not in columns:
+                    cursor.execute(f"ALTER TABLE metrics_history ADD COLUMN {column} {kind}")
             conn.commit()
 
     def save_daily_metrics(self, data: dict):
         """Save metrics data to the database (upsert by date)."""
         query = """
-            INSERT INTO metrics_history (date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, sp500, nasdaq, dxy, total_score)
-            VALUES (:date, :btc_price, :ema_200, :rsi_14, :fear_greed, :m2_yoy, :sp500, :nasdaq, :dxy, :total_score)
+            INSERT INTO metrics_history (date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, sp500, nasdaq, dxy, macd_hist, google_trends, total_score)
+            VALUES (:date, :btc_price, :ema_200, :rsi_14, :fear_greed, :m2_yoy, :sp500, :nasdaq, :dxy, :macd_hist, :google_trends, :total_score)
             ON CONFLICT(date) DO UPDATE SET
                 btc_price=excluded.btc_price,
                 ema_200=excluded.ema_200,
@@ -110,6 +113,8 @@ class DatabaseManager:
                 sp500=excluded.sp500,
                 nasdaq=excluded.nasdaq,
                 dxy=excluded.dxy,
+                macd_hist=excluded.macd_hist,
+                google_trends=excluded.google_trends,
                 total_score=excluded.total_score;
         """
         with self._get_connection() as conn:
@@ -257,6 +262,30 @@ class DatabaseManager:
         with self._get_connection() as conn:
             query = "SELECT * FROM btc_indicators ORDER BY date"
             return pd.read_sql_query(query, conn)
+
+    def load_fear_greed(self) -> pd.DataFrame:
+        """Load the full Fear & Greed history."""
+        with self._get_connection() as conn:
+            query = "SELECT date, value, classification FROM fear_greed_history"
+            return pd.read_sql_query(query, conn)
+
+    def load_fred_series(self, series_id: str = "M2SL") -> pd.DataFrame:
+        """Load a FRED series history."""
+        with self._get_connection() as conn:
+            query = "SELECT date, value FROM fred_series WHERE series_id = ? ORDER BY date"
+            return pd.read_sql_query(query, conn, params=(series_id,))
+
+    def load_stock_history(self) -> pd.DataFrame:
+        """Load the aligned stock index history (SP500/NASDAQ/DXY)."""
+        with self._get_connection() as conn:
+            query = "SELECT date, sp500, nasdaq, dxy FROM stock_history ORDER BY date"
+            return pd.read_sql_query(query, conn)
+
+    def load_google_trends(self, keyword: str = "bitcoin") -> pd.DataFrame:
+        """Load the Google Trends interest history for a keyword."""
+        with self._get_connection() as conn:
+            query = "SELECT date, value FROM google_trends WHERE keyword = ? ORDER BY date"
+            return pd.read_sql_query(query, conn, params=(keyword,))
 
     def table_counts(self) -> dict:
         """Row count for every known table."""

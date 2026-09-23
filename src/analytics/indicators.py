@@ -39,12 +39,12 @@ def calculate_technical_indicators(
     """
     if df is None or df.empty or "close" not in df.columns:
         logger.warning("No data available to compute technical indicators")
-        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0}
+        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0, "macd_hist": 0.0}
 
     close = pd.to_numeric(df["close"], errors="coerce").dropna()
     if close.empty:
         logger.warning("Close prices are not valid")
-        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0}
+        return {"latest_price": 0.0, "ema_200": 0.0, "rsi": 50.0, "macd_hist": 0.0}
 
     latest_price = float(close.iloc[-1])
     ema_200 = float(close.ewm(span=ema_period, adjust=False).mean().iloc[-1])
@@ -57,11 +57,27 @@ def calculate_technical_indicators(
         rsi = 50.0
         logger.warning("Failed to compute RSI, using neutral value 50")
 
+    try:
+        macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+        macd_signal = macd.ewm(span=9, adjust=False).mean()
+        macd_hist = float((macd - macd_signal).iloc[-1])
+        if np.isnan(macd_hist):
+            macd_hist = 0.0
+    except Exception:
+        macd_hist = 0.0
+        logger.warning("Failed to compute MACD histogram, using neutral value 0")
+
     logger.info(
         f"Indicators: price={latest_price:.2f} "
-        f"EMA{ema_period}={ema_200:.2f} RSI{rsi_period}={rsi:.2f}"
+        f"EMA{ema_period}={ema_200:.2f} RSI{rsi_period}={rsi:.2f} "
+        f"MACD_hist={macd_hist:.4f}"
     )
-    return {"latest_price": latest_price, "ema_200": ema_200, "rsi": round(rsi, 2)}
+    return {
+        "latest_price": latest_price,
+        "ema_200": ema_200,
+        "rsi": round(rsi, 2),
+        "macd_hist": round(macd_hist, 4),
+    }
 
 
 def _ema(series: pd.Series, span: int) -> pd.Series:

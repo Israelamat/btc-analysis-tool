@@ -22,6 +22,7 @@ class GoogleTrendsFetcher(BaseFetcher):
         self.hl = hl
         self.tz = tz
         self._client: TrendReq | None = None
+        self._cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     def _get_client(self) -> TrendReq:
         """Lazily build the pytrends client."""
@@ -38,6 +39,10 @@ class GoogleTrendsFetcher(BaseFetcher):
         :param timeframe: Google Trends window, e.g. "today 5-y"
         :return: DataFrame with columns date and value (0-100 scale)
         """
+        cache_key = (keyword, timeframe)
+        if cache_key in self._cache:
+            return self._cache[cache_key].copy()
+
         try:
             client = self._get_client()
             client.build_payload([keyword], timeframe=timeframe)
@@ -54,7 +59,9 @@ class GoogleTrendsFetcher(BaseFetcher):
         df.columns = ["value"]
         df.index.name = "date"
         df = df[df["value"].notna()]
-        return df.reset_index()
+        df = df.reset_index()
+        self._cache[cache_key] = df.copy()
+        return df
 
     def get_history(
         self,
@@ -90,3 +97,18 @@ class GoogleTrendsFetcher(BaseFetcher):
         rows = [r for r in rows if r["date"] >= start_date]
         logger.info(f"Fetched {len(rows)} Google Trends records for [{keyword}]")
         return rows
+
+    def get_latest_value(self, keyword: str = "bitcoin") -> float:
+        """Return the latest Google Trends interest value (0-100).
+
+        Falls back to 50 (neutral) when no data is available.
+        """
+        rows = self.get_history(keyword=keyword, years=1)
+        if not rows:
+            logger.warning("Using neutral Google Trends value 50")
+            return 50.0
+        logger.info(
+            f"Google Trends [{keyword}]: {rows[-1]['value']} "
+            f"(as of {rows[-1]['date']})"
+        )
+        return float(rows[-1]["value"])

@@ -6,6 +6,7 @@ from src.analytics.scoring import BTCAcumulationScorer
 from src.fetchers.btc_binance import BTCFetcher
 from src.fetchers.fear_greed import FearGreedFetcher
 from src.fetchers.fred_m2 import FREDFetcher
+from src.fetchers.google_trends import GoogleTrendsFetcher
 from src.fetchers.stock_indices import StockIndicesFetcher
 from src.storage.db_manager import DatabaseManager
 from src.utils.logger import setup_logger
@@ -24,6 +25,7 @@ def run_pipeline():
     fear_greed_val = FearGreedFetcher().get_latest_score()
     m2_growth = FREDFetcher().get_m2_yoy_growth()
     stocks_data = StockIndicesFetcher().get_major_indices()
+    google_trends_val = GoogleTrendsFetcher().get_latest_value()
 
     logger.info("Calculating technical indicators...")
     tech_data = calculate_technical_indicators(btc_df)
@@ -37,6 +39,8 @@ def run_pipeline():
         fear_greed=fear_greed_val,
         m2_yoy=m2_growth,
         dxy_status=stocks_data.get("DXY_trend", "neutral"),
+        macd_hist=tech_data["macd_hist"],
+        google_trends=google_trends_val,
     )
 
     today_record = {
@@ -49,6 +53,8 @@ def run_pipeline():
         "sp500": stocks_data.get("SP500"),
         "nasdaq": stocks_data.get("NASDAQ"),
         "dxy": stocks_data.get("DXY_trend", "neutral"),
+        "macd_hist": tech_data["macd_hist"],
+        "google_trends": google_trends_val,
         "total_score": score_result["score"],
     }
 

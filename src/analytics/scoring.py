@@ -25,7 +25,15 @@ class BTCAcumulationScorer:
                 f"Ignoring unknown score weights: {missing}"
             )
 
-    _COMPONENTS = ("ema_200", "m2", "fear_greed", "rsi", "dxy")
+    _COMPONENTS = ("ema_200", "m2", "fear_greed", "rsi", "dxy", "macd", "google_trends")
+
+    @staticmethod
+    def _num(value, default: float) -> float:
+        try:
+            number = float(value)
+            return default if number != number else number
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _normalize(weights: dict[str, float]) -> dict[str, float]:
@@ -65,28 +73,49 @@ class BTCAcumulationScorer:
             return 0.0
         return 50.0
 
+    @staticmethod
+    def _score_macd(macd_hist: float, current_price: float) -> float:
+        """Positive histogram relative to price => bullish momentum."""
+        if not current_price:
+            return 50.0
+        pct = (macd_hist / current_price) * 100
+        return _clip(50 + pct * 200)
+
+    @staticmethod
+    def _score_google_trends(value: float) -> float:
+        """High search interest => retail euphoria => contrarian penalty."""
+        return _clip(100 - value)
+
     def _component_scores(self, **kwargs) -> dict[str, float]:
         return {
             "ema_200": self._score_ema_200(
-                kwargs.get("current_price") or 0.0, kwargs.get("ema_200") or 0.0
+                self._num(kwargs.get("current_price"), 0.0),
+                self._num(kwargs.get("ema_200"), 0.0),
             ),
-            "m2": self._score_m2(float(kwargs.get("m2_yoy") or 0.0)),
+            "m2": self._score_m2(self._num(kwargs.get("m2_yoy"), 0.0)),
             "fear_greed": self._score_fear_greed(
-                float(kwargs.get("fear_greed") or 50.0)
+                self._num(kwargs.get("fear_greed"), 50.0)
             ),
-            "rsi": self._score_rsi(float(kwargs.get("rsi") or 50.0)),
+            "rsi": self._score_rsi(self._num(kwargs.get("rsi"), 50.0)),
             "dxy": self._score_dxy(kwargs.get("dxy_status")),
+            "macd": self._score_macd(
+                self._num(kwargs.get("macd_hist"), 0.0),
+                self._num(kwargs.get("current_price"), 0.0),
+            ),
+            "google_trends": self._score_google_trends(
+                self._num(kwargs.get("google_trends"), 50.0)
+            ),
         }
 
     @staticmethod
     def _classify(score: float) -> str:
         if score >= 80:
-            return "Zona de Acumulación Alta"
+            return " High accumation zone"
         if score >= 60:
-            return "Zona de Acumulación Moderada"
+            return "Moderate accumulation zone"
         if score >= 40:
-            return "Zona Neutra"
-        return "Zona a Evitar"
+            return "Neutral zone"
+        return "Not a good zone"
 
     def calculate(
         self,
@@ -96,6 +125,8 @@ class BTCAcumulationScorer:
         fear_greed: float,
         m2_yoy: float,
         dxy_status: str,
+        macd_hist: float = 0.0,
+        google_trends: float = 50.0,
     ) -> dict:
         """Calculate the accumulation score and its zone.
 
@@ -108,6 +139,8 @@ class BTCAcumulationScorer:
             fear_greed=fear_greed,
             m2_yoy=m2_yoy,
             dxy_status=dxy_status,
+            macd_hist=macd_hist,
+            google_trends=google_trends,
         )
 
         score = sum(components[key] * self.weights[key] for key in components)

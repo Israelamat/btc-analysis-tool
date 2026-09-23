@@ -30,6 +30,10 @@ class StockIndicesFetcher(BaseFetcher):
         "DXY": "DX-Y.NYB",
     }
 
+    def __init__(self, timeout: int = 10):
+        # Multi-host retry handling is done in fetch_data.
+        super().__init__(timeout=timeout, max_retries=1)
+
     def fetch_data(
         self, symbol: str, interval: str = "1d", range_period: str = "1mo"
     ) -> dict | None:

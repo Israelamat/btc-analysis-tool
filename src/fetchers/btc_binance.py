@@ -15,6 +15,36 @@ KLINE_COLUMNS = [
     "volume",
 ]
 
+OHLCV_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
+
+
+def _empty_frame() -> pd.DataFrame:
+    """Return an empty DataFrame with the expected OHLCV columns."""
+    return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+
+def _rows_to_frame(rows: list) -> pd.DataFrame:
+    """Convert raw Binance klines into a clean OHLCV DataFrame.
+
+    Binance returns one kline per row as a fixed-length list; only the
+    first six elements (time, OHLC, volume) are used.
+    """
+    if not rows:
+        logger.warning("No klines received from Binance")
+        return _empty_frame()
+
+    df = pd.DataFrame(rows).iloc[:, :6]
+    df.columns = KLINE_COLUMNS
+    df["date"] = pd.to_datetime(df["open_time"], unit="ms").dt.date
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = df[col].astype(float)
+
+    if df["close"].isna().all():
+        logger.warning("BTC klines contain no close prices")
+        return _empty_frame()
+
+    return df[OHLCV_COLUMNS]
+
 
 class BTCFetcher(BaseFetcher):
     """Connector for Binance public spot API."""
@@ -51,28 +81,15 @@ class BTCFetcher(BaseFetcher):
         :return: DataFrame with columns date, open, high, low, close, volume
         """
         data = self.fetch_data(limit=limit)
-        if not data:
+        df = _rows_to_frame(data)
+        if df.empty:
             logger.warning("Returning empty DataFrame (no BTC data available)")
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume"]
-            )
-
-        df = pd.DataFrame(data).iloc[:, :6]
-        df.columns = KLINE_COLUMNS
-        df["date"] = pd.to_datetime(df["open_time"], unit="ms").dt.date
-        for col in ["open", "high", "low", "close", "volume"]:
-            df[col] = df[col].astype(float)
-
-        if df["close"].isna().all():
-            logger.warning("BTC klines contain no close prices")
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume"]
-            )
+            return df
 
         logger.info(
             f"Fetched {len(df)} daily candles for BTC up to {df['date'].iloc[-1]}"
         )
-        return df[["date", "open", "high", "low", "close", "volume"]]
+        return df
 
     def get_full_history(self, chunk: int = 1000) -> pd.DataFrame:
         """Return the complete BTC/USDT daily history from Binance.
@@ -83,7 +100,7 @@ class BTCFetcher(BaseFetcher):
         :param chunk: Max candles per request (Binance cap is 1000)
         :return: DataFrame with columns date, open, high, low, close, volume
         """
-        frames = []
+        rows = []
         start_time = 0
         while True:
             params = {
@@ -101,24 +118,17 @@ class BTCFetcher(BaseFetcher):
             if not isinstance(response, list) or not response:
                 break
 
-            frames.append(pd.DataFrame(response))
+            rows.extend(response)
             if len(response) < chunk:
                 break
             start_time = int(response[-1][0]) + 1
 
-        if not frames:
+        df = _rows_to_frame(rows)
+        if df.empty:
             logger.warning("Returning empty DataFrame (no BTC full history)")
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume"]
-            )
-
-        df = pd.concat(frames, ignore_index=True).iloc[:, :6]
-        df.columns = KLINE_COLUMNS
-        df["date"] = pd.to_datetime(df["open_time"], unit="ms").dt.date
-        for col in ["open", "high", "low", "close", "volume"]:
-            df[col] = df[col].astype(float)
+            return df
 
         logger.info(
             f"Fetched {len(df)} daily candles for BTC up to {df['date'].iloc[-1]}"
         )
-        return df[["date", "open", "high", "low", "close", "volume"]]
+        return df
