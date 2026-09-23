@@ -66,6 +66,21 @@ def _zone_history_stats(
     }
 
 
+def _latest_stored_trends(
+    db: DatabaseManager, max_age_days: int = 30
+) -> float | None:
+    """Latest stored Google Trends value if it is fresh enough."""
+    trends = db.load_google_trends()
+    if trends.empty or "date" not in trends.columns or "value" not in trends.columns:
+        return None
+    trends["date"] = pd.to_datetime(trends["date"])
+    last = trends.sort_values("date").iloc[-1]
+    age_days = (datetime.now() - last["date"].to_pydatetime()).days
+    if 0 <= age_days <= max_age_days:
+        return float(last["value"])
+    return None
+
+
 def _print_report(db: DatabaseManager, record: dict, score_result: dict) -> None:
     zone = score_result["zone"]
     action, ratio = ZONE_ACTION[zone]
@@ -108,6 +123,8 @@ def run_pipeline() -> None:
     """Fetch everything, score the market and present the buy action."""
     logger.info("Init pipeline...")
 
+    db = DatabaseManager()
+
     btc_df = BTCFetcher().get_daily_klines(limit=250)
     if btc_df.empty:
         logger.error("No BTC data available, aborting pipeline")
@@ -117,13 +134,20 @@ def run_pipeline() -> None:
     m2_growth = FREDFetcher().get_m2_yoy_growth()
     stocks_data = StockIndicesFetcher().get_major_indices()
     google_trends_val = GoogleTrendsFetcher().get_latest_value()
+    if google_trends_val == 50.0:
+        stored = _latest_stored_trends(db)
+        if stored is not None:
+            google_trends_val = stored
+            logger.info(
+                f"Using stored Google Trends value {stored:.0f} "
+                f"(fetch fell back to neutral)"
+            )
 
     logger.info("Calculating technical indicators...")
     tech_data = calculate_technical_indicators(btc_df)
 
     # Prefer indicators from the full stored history (backfill) so today's
     # score is consistent with the historical series.
-    db = DatabaseManager()
     stored_indicators = db.load_btc_indicators()
     if not stored_indicators.empty:
         last_row = stored_indicators.iloc[-1]

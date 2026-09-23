@@ -48,7 +48,7 @@ class GoogleTrendsFetcher(BaseFetcher):
             client.build_payload([keyword], timeframe=timeframe)
             df = client.interest_over_time()
         except Exception as e:
-            logger.error(f"Failed to fetch Google Trends for [{keyword}]: {e}")
+            logger.warning(f"Failed to fetch Google Trends for [{keyword}]: {e}")
             return pd.DataFrame(columns=["date", "value"])
 
         if df.empty or keyword not in df.columns:
@@ -89,7 +89,11 @@ class GoogleTrendsFetcher(BaseFetcher):
             start_date = Config.START_DATE
 
         if years is not None:
-            timeframe = f"today {years}-y"
+            end = datetime.now().strftime("%Y-%m-%d")
+            start = (pd.Timestamp.now() - pd.DateOffset(years=int(years))).strftime(
+                "%Y-%m-%d"
+            )
+            timeframe = f"{start} {end}"
         else:
             timeframe = f"{start_date} {datetime.now().strftime('%Y-%m-%d')}"
 
