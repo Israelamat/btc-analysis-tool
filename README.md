@@ -141,10 +141,11 @@ pip install -r requirements.txt
 ### Run the full pipeline
 
 ```python
-python main.py --run
+python main.py
 ```
 
-> Fetches data → computes indicators → scores → saves to SQLite → prints the summary.
+> Fetches data → computes indicators → scores → saves to SQLite → prints the market summary and the **possible buys** (recommended share of your monthly investment for the current zone).
+> All the pipeline logic lives in `src/fetchers/pipeline.py`.
 
 ### Test a single fetcher (dev mode)
 
@@ -305,7 +306,8 @@ btc-analysis-tool/
     │   ├── fear_greed.py       # Fear & Greed Index
     │   ├── fred_m2.py          # FRED M2 money supply
     │   ├── google_trends.py    # Google Trends search interest
-    │   └── stock_indices.py    # S&P 500, NASDAQ, DXY
+    │   ├── stock_indices.py    # S&P 500, NASDAQ, DXY
+    │   └── pipeline.py         # fetch → score → buy actions (main flow)
     └── storage/
         ├── backfill.py         # Historical data backfill CLI
         └── db_manager.py       # SQLite persistence
