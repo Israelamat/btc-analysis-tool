@@ -105,12 +105,12 @@ A weighted composite of tradable signals, normalized to **0–100**, giving a re
 
 ### Zones
 
-| Zone | Score | Mean 90d return (2017→2026) | Win rate |
-|------|-------:|------------------------------:|---------:|
-| **High accumulation** | ≥ 70 | +35.2% | 63.6% |
-| **Moderate accumulation** | 50–69 | +15.0% | 56.0% |
-| **Neutral** | 30–49 | +0.9% | 44.8% |
-| **Not a good zone** | < 30 | −11.5% | 31.2% |
+| Zone | Score | Mean 90d return (2017→2026) | Win rate | Mean 90d max drawdown |
+|------|-------:|------------------------------:|---------:|----------------------:|
+| **High accumulation** | ≥ 70 | +35.2% | 63.6% | −25.8% |
+| **Moderate accumulation** | 50–69 | +15.0% | 56.0% | −24.4% |
+| **Neutral** | 30–49 | +0.9% | 44.8% | −27.6% |
+| **Selling zone** | < 30 | −11.5% | 31.2% | −35.4% |
 
 ---
 
@@ -189,12 +189,18 @@ python -m src.storage.backfill scores
 ## 📊 Backtesting & Calibration
 
 The score is validated against history, not vibes. For every day with a stored score
-it computes the BTC return **7 / 30 / 90 days later** and groups it by zone, so the
-"buy cheap" hypothesis can be checked empirically.
+it computes the BTC return **7 / 30 / 90 / 180 / 365 days later** and groups it by zone,
+so the "buy cheap" hypothesis can be checked empirically. It also reports the **forward
+max drawdown** per zone (worst peak-to-trough within 90/180d windows): the Selling zone
+bottoms out ~10 points deeper than High accumulation, which is what that zone is really
+for — protecting capital.
 
 ```bash
 # Run the backtest (uses stored metrics_history + btc_klines)
 python -m src.analytics.backtest
+
+# Also run the --independent bootstrap + episode-level validation
+python -m src.analytics.backtest --independent
 
 # Save the per-day details to CSV
 python -m src.analytics.backtest --csv backtest.csv

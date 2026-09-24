@@ -20,17 +20,18 @@ logger = setup_logger()
 
 HORIZONS = (7, 30, 90, 180, 365)
 INDEPENDENT_HORIZONS = (30, 90, 180, 365)
+DRAWDOWN_HORIZONS = (90, 180)
 ZONE_BUCKETS = (
     (70.0, "High accumulation zone"),
     (50.0, "Moderate accumulation zone"),
     (30.0, "Neutral zone"),
-    (float("-inf"), "Not a good zone"),
+    (float("-inf"), "Selling zone"),
 )
 
 
 def _bucket(score: pd.Series) -> pd.Series:
     """Map scores to the same zones used by the scorer."""
-    out = pd.Series("Not a good zone", index=score.index, dtype="object")
+    out = pd.Series("Selling zone", index=score.index, dtype="object")
     for threshold, label in ZONE_BUCKETS:
         out[score >= threshold] = label
     return out
@@ -54,6 +55,30 @@ def forward_return(
     base_close = klines["close"].reindex(scored_dates, method="ffill")
     returns = (future_close.to_numpy() / base_close.to_numpy() - 1) * 100
     return pd.Series(returns, index=scored_dates)
+
+
+def forward_max_drawdown(
+    klines: pd.DataFrame, scored_dates: pd.DatetimeIndex, horizon: int
+) -> pd.Series:
+    """Worst peak-to-trough decline (%) inside each forward `horizon`-day window.
+
+    Unlike returns this captures the journey: a zone that ends green at 365d
+    can still lose -40% before recovering. Negative values, lower is worse.
+    """
+    close = klines["close"].to_numpy(dtype=float)
+    close_dates = klines.index
+    out = np.full(len(scored_dates), np.nan)
+    for i, date in enumerate(scored_dates):
+        start = close_dates.searchsorted(date, side="left")
+        end = close_dates.searchsorted(
+            date + pd.Timedelta(days=horizon), side="right"
+        )
+        window = close[start:end]
+        if len(window) == 0:
+            continue
+        peak = np.maximum.accumulate(window)
+        out[i] = float((window / peak - 1).min() * 100)
+    return pd.Series(out, index=scored_dates)
 
 
 def sample_independent(dates: pd.DatetimeIndex, horizon: int) -> pd.DatetimeIndex:
@@ -149,6 +174,27 @@ def summarize(metrics: pd.DataFrame) -> pd.DataFrame:
     return summary.sort_values("zone", key=lambda s: s.map(order))
 
 
+def summarize_drawdowns(metrics: pd.DataFrame) -> pd.DataFrame:
+    """Per-zone worst in-window drawdown (negative %, lower is worse)."""
+    rows = []
+    for zone, group in metrics.groupby("zone", sort=False):
+        row = {"zone": zone, "n": int(len(group))}
+        for horizon in DRAWDOWN_HORIZONS:
+            values = group[f"dd_{horizon}d"].dropna()
+            if values.empty:
+                continue
+            row[f"mean_dd_{horizon}d"] = round(float(values.mean()), 2)
+            row[f"median_dd_{horizon}d"] = round(float(values.median()), 2)
+            row[f"worst_dd_{horizon}d"] = round(float(values.min()), 2)
+        rows.append(row)
+
+    order = {label: index for index, (_, label) in enumerate(ZONE_BUCKETS)}
+    summary = pd.DataFrame(rows)
+    if summary.empty:
+        return summary
+    return summary.sort_values("zone", key=lambda s: s.map(order))
+
+
 def independent_validation(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
@@ -213,6 +259,7 @@ def episode_validation(
 
     stats_rows = []
     evidence_rows = []
+    dd_rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         dates = _episode_first_dates(group)
         for horizon in INDEPENDENT_HORIZONS:
@@ -253,6 +300,23 @@ def episode_validation(
                 }
             )
 
+        for horizon in DRAWDOWN_HORIZONS:
+            drawdowns = forward_max_drawdown(klines, dates, horizon).dropna()
+            if drawdowns.empty:
+                continue
+            dd_lo, dd_hi = bootstrap_ci(drawdowns, np.mean, n_resamples)
+            dd_rows.append(
+                {
+                    "zone": zone,
+                    "horizon": f"{horizon}d",
+                    "ep": len(drawdowns),
+                    "mean_dd": (
+                        f"{drawdowns.mean():.1f}% [{dd_lo:.1f}, {dd_hi:.1f}]"
+                    ),
+                    "worst_dd": f"{drawdowns.min():.1f}%",
+                }
+            )
+
     order = {label: index for index, (_, label) in enumerate(ZONE_BUCKETS)}
     stats_df = pd.DataFrame(stats_rows)
     if not stats_df.empty:
@@ -269,9 +333,9 @@ def episode_validation(
         print("P_win_neg: Bayesian P(true win rate < 50%), Beta(1+w, 1+l)")
         print(evidence_df.to_string(index=False))
 
-        neg = evidence_df[evidence_df["zone"] == "Not a good zone"]
+        neg = evidence_df[evidence_df["zone"] == "Selling zone"]
         if not neg.empty:
-            print("\nBest-supported negative signal (Not a good zone, by P_mean_neg):")
+            print("\nBest-supported negative signal (Selling zone, by P_mean_neg):")
             best = neg.loc[(
                 neg["P_mean_neg"].replace("%", "", regex=True).astype(float).idxmax()
             )]
@@ -280,6 +344,13 @@ def episode_validation(
                 f"P(mean<0)={best['P_mean_neg']}, exact p={best['exact_p']} "
                 f"(H0 win>=50%), Bayesian P(win<50%)={best['P_win_neg']}"
             )
+
+    dd_df = pd.DataFrame(dd_rows)
+    if not dd_df.empty:
+        dd_df = dd_df.sort_values("zone", key=lambda s: s.map(order))
+        print("\n--- Max drawdown per episode (worst peak-to-trough in-window) ---")
+        print("mean_dd: average worst decline from a peak inside the window")
+        print(dd_df.to_string(index=False))
 
 
 def run_backtest(
@@ -311,7 +382,14 @@ def run_backtest(
         )
         metrics[f"ret_{horizon}d"] = forward.to_numpy()
 
+    for horizon in DRAWDOWN_HORIZONS:
+        drawdowns = forward_max_drawdown(
+            klines, pd.DatetimeIndex(metrics["date"]), horizon
+        )
+        metrics[f"dd_{horizon}d"] = drawdowns.to_numpy()
+
     summary = summarize(metrics)
+    dd_summary = summarize_drawdowns(metrics)
 
     print("\n=== Forward returns by score zone ===")
     if summary.empty:
@@ -330,6 +408,27 @@ def run_backtest(
     if len(corr) >= 10:
         correlation = corr["total_score"].corr(corr["ret_90d"])
         print(f"\nCorrelation score vs 90d forward return: {correlation:.3f}")
+
+    print("\n=== Forward max drawdown by zone (worst peak-to-trough in-window) ===")
+    if dd_summary.empty:
+        print("No data to summarize")
+    else:
+        print(dd_summary.to_string(index=False))
+        print("\nReturns measure the end-line; drawdown measures the journey:")
+        neg_zone = dd_summary[dd_summary["zone"] == "Selling zone"]
+        high_zone = dd_summary[dd_summary["zone"] == "High accumulation zone"]
+        for horizon in DRAWDOWN_HORIZONS:
+            if neg_zone.empty or high_zone.empty:
+                continue
+            col = f"mean_dd_{horizon}d"
+            n_mean = float(neg_zone[col].iloc[0])
+            h_mean = float(high_zone[col].iloc[0])
+            print(
+                f"- At {horizon}d the Selling zone bottoms out at a mean "
+                f"{n_mean:.1f}% below its peak vs {h_mean:.1f}% for High "
+                f"accumulation: the zone is about avoiding the crash, "
+                f"not about the 365d end-line."
+            )
 
     if independent:
         independent_validation(metrics, klines, n_resamples=resamples)

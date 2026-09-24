@@ -120,7 +120,7 @@ class BTCAcumulationScorer:
             return "Moderate accumulation zone"
         if score >= 30:
             return "Neutral zone"
-        return "Not a good zone"
+        return "Selling zone"
 
     def calculate(
         self,

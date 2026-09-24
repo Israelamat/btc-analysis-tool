@@ -32,7 +32,7 @@ ZONE_ACTION = {
     "High accumulation zone": ("COMPRA FUERTE", 1.0),
     "Moderate accumulation zone": ("COMPRA NORMAL (DCA)", 0.5),
     "Neutral zone": ("COMPRA LIGERA", 0.25),
-    "Not a good zone": ("NO COMPRAR", 0.0),
+    "Selling zone": ("NO COMPRAR (protege capital)", 0.0),
 }
 
 MONTHLY_EXAMPLE = 1000
