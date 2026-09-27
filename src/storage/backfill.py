@@ -1,8 +1,6 @@
 import json
 import sys
-
 import pandas as pd
-
 from src.analytics.indicators import calculate_indicator_series
 from src.analytics.scoring import BTCAcumulationScorer
 from src.fetchers.btc_binance import BTCFetcher
@@ -16,7 +14,6 @@ from src.utils.logger import setup_logger
 logger = setup_logger()
 
 TARGET = "all"
-
 
 def backfill_btc(db: DatabaseManager) -> None:
     """Fetch the full BTC daily history and store it in SQLite."""

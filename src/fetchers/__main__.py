@@ -1,5 +1,4 @@
 import sys
-
 from src.fetchers.btc_binance import BTCFetcher
 from src.fetchers.fear_greed import FearGreedFetcher
 from src.fetchers.fred_m2 import FREDFetcher
@@ -7,7 +6,6 @@ from src.fetchers.google_trends import GoogleTrendsFetcher
 from src.fetchers.stock_indices import StockIndicesFetcher
 
 TARGET = "all"
-
 
 def run_fetcher_test(target: str = TARGET) -> None:
     """Test the fetchers selected by target.

@@ -1,8 +1,6 @@
 import time
 from abc import ABC, abstractmethod
-
 import requests
-
 from src.utils.logger import setup_logger
 
 logger = setup_logger()

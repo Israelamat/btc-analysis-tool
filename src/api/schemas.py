@@ -1,14 +1,5 @@
-"""Pydantic response models for the documented endpoints.
-
-Endpoints that return wide, column-per-horizon tables (backtest summaries)
-deliberately use plain dicts so new horizons do not require a schema change;
-they are described in the route docstrings instead.
-"""
-
 from typing import Any
-
 from pydantic import BaseModel, Field
-
 
 class ReportComponents(BaseModel):
     """Per-signal sub-scores, 0-100 (higher = more attractive to accumulate)."""

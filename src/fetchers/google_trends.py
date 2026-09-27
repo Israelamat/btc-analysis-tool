@@ -1,14 +1,11 @@
 from datetime import datetime
-
 import pandas as pd
 from pytrends.request import TrendReq
-
 from src.config import Config
 from src.fetchers.base import BaseFetcher
 from src.utils.logger import setup_logger
 
 logger = setup_logger()
-
 
 class GoogleTrendsFetcher(BaseFetcher):
     """Connector for Google Trends search interest.

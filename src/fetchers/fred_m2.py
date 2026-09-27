@@ -1,12 +1,10 @@
 import pandas as pd
 import requests
-
 from src.config import Config
 from src.fetchers.base import BaseFetcher
 from src.utils.logger import setup_logger
 
 logger = setup_logger()
-
 
 class FREDFetcher(BaseFetcher):
     """Connector for FRED (Federal Reserve Bank of St. Louis) series."""

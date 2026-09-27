@@ -1,15 +1,5 @@
-"""Report the time range of every table stored in the local SQLite database.
-
-Reads each stored table and prints its row count plus, whenever a usable
-date column exists, the min/max date and the span in days. Tables that are
-empty, lack a date column or fail to load are reported with the specific
-reason instead of aborting the whole run.
-"""
-
 import sqlite3
-
 import pandas as pd
-
 from src.storage.db_manager import DatabaseManager
 from src.utils.logger import setup_logger
 

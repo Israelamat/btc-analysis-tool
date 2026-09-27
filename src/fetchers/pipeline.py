@@ -1,14 +1,3 @@
-"""Live pipeline: fetch the APIs, run the light analytics and show buy actions.
-
-All the pipeline logic lives here, next to the fetchers, so ``main.py`` stays
-a thin entry point:
-
-    fetch APIs  ->  compute indicators + score  ->  present possible buys
-
-Reuses the stored full history for stable indicator values when available and
-saves today's metrics so the backtest keeps working.
-"""
-
 import json
 from datetime import datetime
 

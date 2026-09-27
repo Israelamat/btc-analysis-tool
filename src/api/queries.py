@@ -2,9 +2,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from functools import lru_cache
-
 import pandas as pd
-
 from src.analytics.backtest import (
     ZONE_BUCKETS,
     load_metrics_with_forwards,

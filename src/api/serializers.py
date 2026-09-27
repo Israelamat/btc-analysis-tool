@@ -1,14 +1,6 @@
-"""Turn pandas / numpy values into JSON-safe Python builtins.
-
-FastAPI cannot serialize ``NaN``, ``numpy`` scalars or ``Timestamp`` objects,
-and ``NaN`` is not valid JSON either, so every value that leaves the API goes
-through :func:`jsonable`. Missing numbers become ``null`` instead of ``NaN``.
-"""
-
 import math
 from datetime import date, datetime, time
 from typing import Any
-
 import numpy as np
 import pandas as pd
 

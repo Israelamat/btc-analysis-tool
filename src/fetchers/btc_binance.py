@@ -1,6 +1,5 @@
 import pandas as pd
 import requests
-
 from src.fetchers.base import BaseFetcher
 from src.utils.logger import setup_logger
 

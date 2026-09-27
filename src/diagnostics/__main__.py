@@ -1,5 +1,3 @@
-import sys
-
 from src.diagnostics.data_coverage import run_report
 
 if __name__ == "__main__":

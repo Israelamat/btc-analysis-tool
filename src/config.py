@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 class Config:
     FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
     DB_PATH: str = os.getenv("DB_PATH", "data/macro_crypto.db")

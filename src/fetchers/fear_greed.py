@@ -1,12 +1,9 @@
 from datetime import datetime, timezone
-
 import requests
-
 from src.fetchers.base import BaseFetcher
 from src.utils.logger import setup_logger
 
 logger = setup_logger()
-
 
 class FearGreedFetcher(BaseFetcher):
     """Connector for the Fear & Greed Index API"""

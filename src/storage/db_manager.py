@@ -3,7 +3,6 @@ import sqlite3
 import pandas as pd
 from src.config import Config
 
-
 class DatabaseManager:
 
     TABLE_NAMES = (
