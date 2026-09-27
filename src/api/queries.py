@@ -11,6 +11,7 @@ from src.analytics.backtest import (
 from src.analytics.calibrate import collect_calibration
 from src.analytics.scoring import BTCAcumulationScorer
 from src.api.cache import TTLCache
+from src.api.params import DEFAULT_LIMIT
 from src.api.serializers import date_str, jsonable, records
 from src.config import Config
 from src.fetchers.pipeline import ZONE_ACTION, zone_history_stats
@@ -20,7 +21,6 @@ from src.utils.logger import setup_logger
 logger = setup_logger()
 
 CORRELATION_HORIZON = 90
-DEFAULT_ROW_LIMIT = 20
 
 COMPONENT_META = {
     "google_trends": {
@@ -151,18 +151,24 @@ def clear_cache() -> None:
 
 def table_series(
     source: str,
-    limit: int = DEFAULT_ROW_LIMIT,
+    limit: int = DEFAULT_LIMIT,
     date: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
 ) -> dict:
     """Rows of one stored table, oldest first.
 
     Every table endpoint goes through here, so they all accept the same window
-    and answer the same way: ``?limit=`` returns the most recent rows, while
-    ``?date=`` narrows the result to a single day.
+    and answer the same way: ``?date=`` narrows the result to a single day,
+    ``?start=``/``?end=`` to an inclusive range, and ``?limit=`` keeps the most
+    recent rows of whatever window is left. ``total`` counts the rows matching
+    the window before the limit, so a client can page by moving ``end`` back.
 
     :param source: key of :data:`TABLE_SOURCES`
-    :param limit: max rows to return, the most recent ones
+    :param limit: max rows to return, the most recent ones of the window
     :param date: when given, only the row of that date
+    :param start: inclusive window start
+    :param end: inclusive window end
     :raises KeyError: when the source name is unknown
     """
     if source not in TABLE_SOURCES:
@@ -174,7 +180,11 @@ def table_series(
         "source": source,
         "table": spec["table"],
         "date": date,
+        "start": start,
+        "end": end,
+        "limit": int(limit) if limit else None,
         "count": 0,
+        "total": 0,
         "rows": [],
     }
     if frame is None or frame.empty:
@@ -186,7 +196,14 @@ def table_series(
 
     if date:
         frame = frame[frame["date"] == pd.Timestamp(date)]
-    elif limit:
+    else:
+        if start:
+            frame = frame[frame["date"] >= pd.Timestamp(start)]
+        if end:
+            frame = frame[frame["date"] <= pd.Timestamp(end)]
+
+    payload["total"] = int(len(frame))
+    if limit:
         frame = frame.tail(int(limit))
 
     keep = [column for column in spec["columns"] if column in frame.columns]
