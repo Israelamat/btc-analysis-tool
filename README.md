@@ -44,7 +44,7 @@ Public market dashboards are black boxes. This one is **yours**:
 
 ## 🧱 Current Stage
 
-> ⚠️ **Early stage.** Right now the project connects to the **main market APIs** to acquire and store the core data — everything else is built on top of that foundation.
+> ⚠️ **Early stage.** The project acquires and stores the core data from the **main market APIs**, scores it, and now serves it over a **REST API** — everything else is built on top of that foundation.
 
 ```
                     ┌──────────────────────────────┐
@@ -70,6 +70,13 @@ Public market dashboards are black boxes. This one is **yours**:
 ┌───────────────────────────────────────────────────┐
 │            STORAGE LAYER (src/storage/)           │
 │   db_manager.py ──► SQLite daily metrics history  │
+└───────────────────────┬───────────────────────────┘
+                        ▼
+┌───────────────────────────────────────────────────┐
+│              API LAYER (src/api/)                 │
+│   FastAPI ──► /api/dashboard  (one call, 9 blocks) │
+│                /api/refresh    (live pipeline run) │
+│                /api/{stocks,fear-greed,fred,…}    │
 └───────────────────────────────────────────────────┘
 ```
 
@@ -184,6 +191,83 @@ python -m src.storage.backfill scores
 [+] Stocks: {'SP500': 7764.64, 'NASDAQ': 27244.28, 'DXY_trend': 'bullish'}
 ```
 
+### 🌐 REST API
+
+A read-only FastAPI service over the same SQLite database, built to feed a
+dashboard without touching the CLI. Only `POST /api/refresh` goes out to the
+network; everything else is served from disk.
+
+```bash
+python -m src.api          # http://127.0.0.1:8000  (docs at /docs)
+```
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `API_HOST` | `127.0.0.1` | Bind address |
+| `API_PORT` | `8000` | Port |
+| `API_RELOAD` | `0` | `1` enables uvicorn auto-reload |
+| `API_CORS_ORIGINS` | `localhost:4200,127.0.0.1:4200,localhost:4300,127.0.0.1:4300` | Comma-separated allowed origins |
+
+#### Endpoints
+
+| Method | Route | Returns |
+|--------|-------|---------|
+| `GET` | `/api/dashboard?days=90` | The nine blocks described below, in one call |
+| `POST` | `/api/refresh` | Runs the pipeline live, stores it, returns the report |
+| `GET` | `/api/config` | Weights, zone thresholds, buy actions, component metadata |
+| `GET` | `/api/score/history` | Stored daily scores (`metrics_history`) |
+| `GET` | `/api/klines` | BTC/USDT daily candles (`btc_klines`) |
+| `GET` | `/api/indicators` | Computed indicators (`btc_indicators`) |
+| `GET` | `/api/fear-greed` | Fear & Greed index (`fear_greed_history`) |
+| `GET` | `/api/fred` | M2 money supply (`fred_series`) |
+| `GET` | `/api/stocks` | Equity and dollar data (`stock_history`) |
+| `GET` | `/api/google-trends` | Search interest (`google_trends`) |
+| `GET` | `/` | Route index, grouped by tag |
+
+`GET /api/dashboard` bundles nine blocks: `report` (today's score), `zone` (streak,
+thresholds, price context, distribution, transitions), `macro` (latest value of every
+source), `config`, `backtest` (forward return per zone and horizon), `calibration`,
+`health`, `history` (short score/price series) and `generated_at`.
+
+```jsonc
+// GET /api/dashboard  ->  report
+{
+  "date": "2026-09-27", "btc_price": 84498.88, "ema_200": 73369.2, "rsi_14": 65.21,
+  "fear_greed": 70, "m2_yoy": 5.66, "sp500": 7743.41, "nasdaq": 27068.72,
+  "dxy": "bullish", "macd_hist": 222.81, "google_trends": 29.0,
+  "total_score": 63, "zone": "Moderate accumulation zone",
+  "components": { "google_trends": 71, "macd": 100, "dxy": 0, "m2": 70.8,
+                  "ema_200": 5, "fear_greed": 30, "rsi": 12 },
+  "zone_history": { "n": 1667, "mean": 14.87, "win": 55.97 },
+  "action": "COMPRA NORMAL (DCA)", "ratio": 0.5, "source": "stored"
+}
+```
+
+The seven table endpoints share one contract and one set of query params:
+
+| Param | Meaning |
+|-------|---------|
+| `?limit=` | Max rows, the most recent of the window (default **20**, max **365**) |
+| `?date=` | One single day, `YYYY-MM-DD` |
+| `?start=` `&end=` | Inclusive window, `YYYY-MM-DD` |
+
+```jsonc
+// GET /api/score/history?start=2026-09-01&end=2026-09-27
+{
+  "source": "scores", "table": "metrics_history",
+  "date": null, "start": "2026-09-01", "end": "2026-09-27", "limit": 20,
+  "count": 20,          // rows returned
+  "total": 25,          // rows matching the window, before the limit
+  "rows": [ { "date": "2026-09-01", "total_score": 47.0, "zone": "Neutral zone", /* … */ }, … ]
+}
+```
+
+Rows always come oldest first, so a chart never has to reverse them. `total` tells
+you whether more pages exist: walk backwards moving `end`. Bad input returns `422`
+with a `detail` message, an unknown route `404`, and any unexpected error `500`
+as JSON instead of a stack trace. The full contract lives in `/docs` and
+`/openapi.json`.
+
 ---
 
 ## 📊 Backtesting & Calibration
@@ -241,6 +325,7 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
 - [x] **Data-driven weight & zone calibration**
 - [x] SQLite persistence with daily history
 - [x] Standalone fetcher testing via CLI
+- [x] **Read-only REST API over the stored data** (`GET /api/dashboard`, `POST /api/refresh`)
 - [x] Public README & project scaffolding
 
 ### 🔜 Foundation (current focus)
@@ -266,7 +351,7 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
   - [ ] Central bank interest rate decisions
 
 ### 🖥️ The Dashboard Era
-- [ ] **Web dashboard** (FastAPI + lightweight SPA) — your own private trading desk
+- [ ] **Web dashboard** — the REST API is ready; the SPA on top of it is next
 - [ ] Multi-asset watchlist: BTC + ETH + top alts + macro pairs
 - [ ] Interactive candlestick charts with custom indicator overlay
 - [ ] Cross-correlation explorer (BTC vs. macro vs. on-chain)
@@ -284,9 +369,10 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
 | Language | Python 3.12+ |
 | Data | pandas · numpy · requests |
 | Storage | SQLite |
+| API | FastAPI · Uvicorn · Pydantic |
 | Config | python-dotenv |
 | CLI | argparse |
-| Vision | FastAPI · Charts (ECharts/Plotly) · Tailwind |
+| Vision | Charts (ECharts/Plotly) · Tailwind |
 
 ---
 
@@ -296,16 +382,27 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
 btc-analysis-tool/
 ├── main.py                     # Pipeline entry point
 ├── requirements.txt
-├── .env.example                # Configuration template
-├── data/                       # SQLite databases (gitignored)
+├── .env                        # Configuration (FRED_API_KEY, DB_PATH) — gitignored
+├── data/                       # SQLite database (gitignored)
 ├── logs/                       # Application logs (gitignored)
 └── src/
     ├── config.py               # Env-driven configuration
+    ├── api/                    # Read-only REST API (FastAPI)
+    │   ├── __main__.py         # `python -m src.api` entry point
+    │   ├── app.py              # App factory, CORS, error handlers, route index
+    │   ├── routers/            # dashboard · meta · history · report
+    │   ├── queries.py          # Read models shared by every endpoint
+    │   ├── schemas.py          # Pydantic response contracts
+    │   ├── serializers.py      # pandas/numpy → JSON-safe values
+    │   ├── params.py           # Query params and their validation
+    │   └── cache.py            # TTL cache for the heavy frames
     ├── analytics/
     │   ├── indicators.py       # EMA-200, RSI-14, MACD
     │   ├── scoring.py          # Composite market scoring engine
     │   ├── backtest.py         # Forward-return validation by score zone
     │   └── calibrate.py        # Per-signal predictive-power diagnostics
+    ├── diagnostics/
+    │   └── data_coverage.py    # Per-table date range and row counts
     ├── fetchers/
     │   ├── base.py             # HTTP helper (headers, timeout, errors)
     │   ├── btc_binance.py      # Binance klines
@@ -314,9 +411,11 @@ btc-analysis-tool/
     │   ├── google_trends.py    # Google Trends search interest
     │   ├── stock_indices.py    # S&P 500, NASDAQ, DXY
     │   └── pipeline.py         # fetch → score → buy actions (main flow)
-    └── storage/
-        ├── backfill.py         # Historical data backfill CLI
-        └── db_manager.py       # SQLite persistence
+    ├── storage/
+    │   ├── backfill.py         # Historical data backfill CLI
+    │   └── db_manager.py       # SQLite persistence
+    └── utils/
+        └── logger.py           # Shared logger setup
 ```
 
 ---
