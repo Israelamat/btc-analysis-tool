@@ -38,7 +38,7 @@ ZONE_ACTION = {
 MONTHLY_EXAMPLE = 1000
 
 
-def _zone_history_stats(
+def zone_history_stats(
     db: DatabaseManager, zone: str, horizon: int = 90
 ) -> dict | None:
     """Historical n / mean return / win rate for the current zone (if stored)."""
@@ -109,7 +109,7 @@ def _print_report(db: DatabaseManager, record: dict, score_result: dict) -> None
         f"[+] Invertir ahora {ratio:.0%} del monto mensual "
         f"(~${amount:,.0f} de ${MONTHLY_EXAMPLE:,.0f})"
     )
-    stats = _zone_history_stats(db, zone)
+    stats = zone_history_stats(db, zone)
     if stats and "mean" in stats:
         print(
             f"[+] En esta zona, históricamente: retorno medio 90d "
@@ -119,25 +119,42 @@ def _print_report(db: DatabaseManager, record: dict, score_result: dict) -> None
     print()
 
 
-def run_pipeline() -> None:
-    """Fetch everything, score the market and present the buy action."""
-    logger.info("Init pipeline...")
+def collect_market_snapshot(db: DatabaseManager) -> dict | None:
+    """Fetch every live source, score the market and return the snapshot.
 
-    db = DatabaseManager()
+    This is the single place where the console report and the REST API get
+    their numbers from, so both always agree.
+
+    :param db: database used for the stored indicator / Google Trends fallbacks
+        and where the fetched candles are persisted
+    :return: dict with 'record' (DB-ready, components serialized as JSON),
+        'components' (per-signal scores as floats), 'score_result' and
+        'sources' (which fallbacks were used), or None when BTC data is
+        unavailable
+    """
+    logger.info("Init pipeline...")
 
     btc_df = BTCFetcher().get_daily_klines(limit=250)
     if btc_df.empty:
         logger.error("No BTC data available, aborting pipeline")
-        return
+        return None
+
+    # Persist the candles so btc_klines never lags behind metrics_history:
+    # /api/price, the zone price context and the backtest windows all read
+    # this table, and today is only stored in metrics_history otherwise.
+    saved_candles = db.upsert_btc_klines(btc_df)
+    logger.info(f"Stored {saved_candles} BTC candles")
 
     fear_greed_val = FearGreedFetcher().get_latest_score()
     m2_growth = FREDFetcher().get_m2_yoy_growth()
     stocks_data = StockIndicesFetcher().get_major_indices()
     google_trends_val = GoogleTrendsFetcher().get_latest_value()
+    trends_fallback = False
     if google_trends_val == 50.0:
         stored = _latest_stored_trends(db)
         if stored is not None:
             google_trends_val = stored
+            trends_fallback = True
             logger.info(
                 f"Using stored Google Trends value {stored:.0f} "
                 f"(fetch fell back to neutral)"
@@ -149,6 +166,7 @@ def run_pipeline() -> None:
     # Prefer indicators from the full stored history (backfill) so today's
     # score is consistent with the historical series.
     stored_indicators = db.load_btc_indicators()
+    stored_indicators_used = False
     if not stored_indicators.empty:
         last_row = stored_indicators.iloc[-1]
         stored_date = pd.to_datetime(last_row["date"]).date()
@@ -156,6 +174,7 @@ def run_pipeline() -> None:
             tech_data["ema_200"] = float(last_row["ema_200"])
             tech_data["rsi"] = float(last_row["rsi_14"])
             tech_data["macd_hist"] = float(last_row["macd_hist"])
+            stored_indicators_used = True
             logger.info("Using indicators from full stored history")
 
     logger.info("Calculating score...")
@@ -171,7 +190,7 @@ def run_pipeline() -> None:
         google_trends=google_trends_val,
     )
 
-    today_record = {
+    record = {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "btc_price": tech_data["latest_price"],
         "ema_200": tech_data["ema_200"],
@@ -188,7 +207,29 @@ def run_pipeline() -> None:
         "components": json.dumps(score_result["components"], ensure_ascii=False),
     }
 
-    logger.info("Saving results to database...")
-    db.save_daily_metrics(today_record)
+    return {
+        "record": record,
+        "components": score_result["components"],
+        "score_result": score_result,
+        "latest_candle_date": tech_data.get("latest_date"),
+        "sources": {
+            "google_trends_fallback": trends_fallback,
+            "stored_indicators": stored_indicators_used,
+            "sp500": stocks_data.get("SP500") is not None,
+            "nasdaq": stocks_data.get("NASDAQ") is not None,
+            "m2": bool(m2_growth),
+        },
+    }
 
-    _print_report(db, today_record, score_result)
+
+def run_pipeline() -> None:
+    """Fetch everything, score the market and present the buy action."""
+    db = DatabaseManager()
+    snapshot = collect_market_snapshot(db)
+    if snapshot is None:
+        return
+
+    logger.info("Saving results to database...")
+    db.save_daily_metrics(snapshot["record"])
+
+    _print_report(db, snapshot["record"], snapshot["score_result"])

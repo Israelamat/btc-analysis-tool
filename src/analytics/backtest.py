@@ -167,11 +167,7 @@ def summarize(metrics: pd.DataFrame) -> pd.DataFrame:
             row[f"win_rate_{horizon}d"] = round(float((values > 0).mean()) * 100, 1)
         rows.append(row)
 
-    order = {label: index for index, (_, label) in enumerate(ZONE_BUCKETS)}
-    summary = pd.DataFrame(rows)
-    if summary.empty:
-        return summary
-    return summary.sort_values("zone", key=lambda s: s.map(order))
+    return _zone_order(pd.DataFrame(rows))
 
 
 def summarize_drawdowns(metrics: pd.DataFrame) -> pd.DataFrame:
@@ -188,27 +184,29 @@ def summarize_drawdowns(metrics: pd.DataFrame) -> pd.DataFrame:
             row[f"worst_dd_{horizon}d"] = round(float(values.min()), 2)
         rows.append(row)
 
+    return _zone_order(pd.DataFrame(rows))
+
+
+def _zone_order(frame: pd.DataFrame) -> pd.DataFrame:
     order = {label: index for index, (_, label) in enumerate(ZONE_BUCKETS)}
-    summary = pd.DataFrame(rows)
-    if summary.empty:
-        return summary
-    return summary.sort_values("zone", key=lambda s: s.map(order))
+    if frame.empty:
+        return frame
+    return frame.sort_values("zone", key=lambda s: s.map(order))
 
 
-def independent_validation(
+def independent_table(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
-) -> None:
-    """Report non-overlapping, bootstrapped stats for every zone.
+) -> pd.DataFrame:
+    """Per-zone stats on non-overlapping, bootstrapped samples.
 
     Daily scores overlap heavily (3312 days are ~37 independent 90d cycles),
-    so this section re-samples each zone at `horizon`-day spacing and wraps
+    so this re-samples each zone at `horizon`-day spacing and wraps
     mean/win-rate in a 95% percentile-bootstrap interval.
-    """
-    print(f"\n=== Independent-sample validation (bootstrap 95% CI, {n_resamples} resamples) ===")
-    print("Non-overlapping picks; wide CIs on thin zones are the honest picture.")
 
+    :return: DataFrame with zone, horizon, n and bootstrapped mean/win-rate
+    """
     rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         dates = pd.DatetimeIndex(group["date"])
@@ -233,12 +231,116 @@ def independent_validation(
                     ),
                 }
             )
+    return _zone_order(pd.DataFrame(rows))
 
-    table = pd.DataFrame(rows)
-    order = {label: index for index, (_, label) in enumerate(ZONE_BUCKETS)}
+
+def independent_validation(
+    metrics: pd.DataFrame,
+    klines: pd.DataFrame,
+    n_resamples: int = 2000,
+) -> None:
+    """Report non-overlapping, bootstrapped stats for every zone."""
+    print(f"\n=== Independent-sample validation (bootstrap 95% CI, {n_resamples} resamples) ===")
+    print("Non-overlapping picks; wide CIs on thin zones are the honest picture.")
+
+    table = independent_table(metrics, klines, n_resamples=n_resamples)
     if not table.empty:
-        table = table.sort_values("zone", key=lambda s: s.map(order))
         print(table.to_string(index=False))
+
+
+def episode_stats_table(
+    metrics: pd.DataFrame,
+    klines: pd.DataFrame,
+    n_resamples: int = 2000,
+) -> pd.DataFrame:
+    """Per-zone stats using one observation per consecutive-day run."""
+    stats_rows = []
+    for zone, group in metrics.groupby("zone", sort=False):
+        dates = _episode_first_dates(group)
+        for horizon in INDEPENDENT_HORIZONS:
+            returns = forward_return(klines, dates, horizon).dropna()
+            if returns.empty:
+                continue
+            mean_lo, mean_hi = bootstrap_ci(returns, np.mean, n_resamples)
+            win_lo, win_hi = bootstrap_ci(
+                returns, lambda x: float((x > 0).mean()) * 100, n_resamples
+            )
+            stats_rows.append(
+                {
+                    "zone": zone,
+                    "horizon": f"{horizon}d",
+                    "ep": len(returns),
+                    "mean_ret": f"{returns.mean():.1f}% [{mean_lo:.1f}, {mean_hi:.1f}]",
+                    "win_rate": (
+                        f"{float((returns > 0).mean()) * 100:.1f}%"
+                        f" [{win_lo:.1f}, {win_hi:.1f}]"
+                    ),
+                }
+            )
+    return _zone_order(pd.DataFrame(stats_rows))
+
+
+def episode_evidence_table(
+    metrics: pd.DataFrame,
+    klines: pd.DataFrame,
+    n_resamples: int = 2000,
+) -> pd.DataFrame:
+    """Per-zone significance of a negative edge, one observation per run.
+
+    Combines a 95% bootstrap interval, an exact one-sided binomial test
+    (H0: win rate >= 50%) and a Bayesian posterior P(win rate < 50%), which
+    stays interpretable on the thin Selling-zone sample.
+
+    :return: DataFrame with zone, horizon, episodes, wins, exact_p,
+        P_mean_neg and P_win_neg
+    """
+    rows = []
+    for zone, group in metrics.groupby("zone", sort=False):
+        dates = _episode_first_dates(group)
+        for horizon in INDEPENDENT_HORIZONS:
+            returns = forward_return(klines, dates, horizon).dropna()
+            if returns.empty:
+                continue
+            n = int(len(returns))
+            wins = int((returns > 0).sum())
+            rows.append(
+                {
+                    "zone": zone,
+                    "horizon": f"{horizon}d",
+                    "ep": n,
+                    "wins": f"{wins}/{n}",
+                    "exact_p": f"{_binomial_cdf(wins, n):.3f}",
+                    "P_mean_neg": f"{_probability_mean_negative(returns, n_resamples):.0%}",
+                    "P_win_neg": f"{_binomial_cdf(wins, n + 1):.0%}",
+                }
+            )
+    return _zone_order(pd.DataFrame(rows))
+
+
+def episode_drawdown_table(
+    metrics: pd.DataFrame,
+    klines: pd.DataFrame,
+    n_resamples: int = 2000,
+) -> pd.DataFrame:
+    """Per-zone forward max drawdown, one observation per run."""
+    rows = []
+    for zone, group in metrics.groupby("zone", sort=False):
+        dates = _episode_first_dates(group)
+        for horizon in DRAWDOWN_HORIZONS:
+            drawdowns = forward_max_drawdown(klines, dates, horizon).dropna()
+            if drawdowns.empty:
+                continue
+            dd_lo, dd_hi = bootstrap_ci(drawdowns, np.mean, n_resamples)
+            rows.append(
+                {
+                    "zone": zone,
+                    "horizon": f"{horizon}d",
+                    "ep": len(drawdowns),
+                    "mean_dd": f"{drawdowns.mean():.1f}% [{dd_lo:.1f}, {dd_hi:.1f}]",
+                    "worst_dd": f"{drawdowns.min():.1f}%",
+                }
+            )
+    return _zone_order(pd.DataFrame(rows))
 
 
 def episode_validation(
@@ -257,76 +359,13 @@ def episode_validation(
     print("\n=== Episode-level validation (1 return per run) ===")
     print("Each consecutive-day run counts once, not each day.")
 
-    stats_rows = []
-    evidence_rows = []
-    dd_rows = []
-    for zone, group in metrics.groupby("zone", sort=False):
-        dates = _episode_first_dates(group)
-        for horizon in INDEPENDENT_HORIZONS:
-            returns = forward_return(klines, dates, horizon).dropna()
-            if returns.empty:
-                continue
-            n = int(len(returns))
-            wins = int((returns > 0).sum())
-            mean_lo, mean_hi = bootstrap_ci(returns, np.mean, n_resamples)
-            win_lo, win_hi = bootstrap_ci(
-                returns, lambda x: float((x > 0).mean()) * 100, n_resamples
-            )
-            exact_p = _binomial_cdf(wins, n)
-            bayes_p_neg = _binomial_cdf(wins, n + 1)
-            prob_mean_neg = _probability_mean_negative(returns, n_resamples)
-
-            stats_rows.append(
-                {
-                    "zone": zone,
-                    "horizon": f"{horizon}d",
-                    "ep": n,
-                    "mean_ret": f"{returns.mean():.1f}% [{mean_lo:.1f}, {mean_hi:.1f}]",
-                    "win_rate": (
-                        f"{float((returns > 0).mean()) * 100:.1f}%"
-                        f" [{win_lo:.1f}, {win_hi:.1f}]"
-                    ),
-                }
-            )
-            evidence_rows.append(
-                {
-                    "zone": zone,
-                    "horizon": f"{horizon}d",
-                    "ep": n,
-                    "wins": f"{wins}/{n}",
-                    "exact_p": f"{exact_p:.3f}",
-                    "P_mean_neg": f"{prob_mean_neg:.0%}",
-                    "P_win_neg": f"{bayes_p_neg:.0%}",
-                }
-            )
-
-        for horizon in DRAWDOWN_HORIZONS:
-            drawdowns = forward_max_drawdown(klines, dates, horizon).dropna()
-            if drawdowns.empty:
-                continue
-            dd_lo, dd_hi = bootstrap_ci(drawdowns, np.mean, n_resamples)
-            dd_rows.append(
-                {
-                    "zone": zone,
-                    "horizon": f"{horizon}d",
-                    "ep": len(drawdowns),
-                    "mean_dd": (
-                        f"{drawdowns.mean():.1f}% [{dd_lo:.1f}, {dd_hi:.1f}]"
-                    ),
-                    "worst_dd": f"{drawdowns.min():.1f}%",
-                }
-            )
-
-    order = {label: index for index, (_, label) in enumerate(ZONE_BUCKETS)}
-    stats_df = pd.DataFrame(stats_rows)
+    stats_df = episode_stats_table(metrics, klines, n_resamples=n_resamples)
     if not stats_df.empty:
-        stats_df = stats_df.sort_values("zone", key=lambda s: s.map(order))
         print("\n--- Stats per episode ---")
         print(stats_df.to_string(index=False))
 
-    evidence_df = pd.DataFrame(evidence_rows)
+    evidence_df = episode_evidence_table(metrics, klines, n_resamples=n_resamples)
     if not evidence_df.empty:
-        evidence_df = evidence_df.sort_values("zone", key=lambda s: s.map(order))
         print("\n--- Evidence (small p_exact supports a negative edge) ---")
         print("exact_p: one-sided binomial test, H0 win rate >= 50%")
         print("P_mean_neg: bootstrap probability that episode mean return < 0")
@@ -345,24 +384,27 @@ def episode_validation(
                 f"(H0 win>=50%), Bayesian P(win<50%)={best['P_win_neg']}"
             )
 
-    dd_df = pd.DataFrame(dd_rows)
+    dd_df = episode_drawdown_table(metrics, klines, n_resamples=n_resamples)
     if not dd_df.empty:
-        dd_df = dd_df.sort_values("zone", key=lambda s: s.map(order))
         print("\n--- Max drawdown per episode (worst peak-to-trough in-window) ---")
         print("mean_dd: average worst decline from a peak inside the window")
         print(dd_df.to_string(index=False))
 
 
-def run_backtest(
-    csv_path: str | None = None,
-    independent: bool = False,
-    resamples: int = 2000,
-) -> pd.DataFrame:
-    db = DatabaseManager()
+def load_metrics_with_forwards(db: DatabaseManager) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load stored scores joined with their forward returns and drawdowns.
+
+    Zones are inferred from ``total_score`` when the stored ``zone`` column is
+    missing, so the frame is always usable for the summaries.
+
+    :return: tuple of (metrics frame with ret_/dd_ columns, klines indexed by
+        date), or two empty frames when the required tables are missing
+    """
+    empty = pd.DataFrame()
     metrics = db.load_metrics_history()
     if metrics.empty:
         logger.error("No scored metrics found; run the score backfill first")
-        return pd.DataFrame()
+        return empty, empty
 
     metrics["date"] = pd.to_datetime(metrics["date"])
     if "zone" not in metrics.columns or metrics["zone"].isna().all():
@@ -374,19 +416,26 @@ def run_backtest(
     klines = _load_klines(db)
     if klines.empty:
         logger.error("No BTC klines found; run the BTC backfill first")
-        return pd.DataFrame()
+        return empty, empty
 
+    dates = pd.DatetimeIndex(metrics["date"])
     for horizon in HORIZONS:
-        forward = forward_return(
-            klines, pd.DatetimeIndex(metrics["date"]), horizon
-        )
-        metrics[f"ret_{horizon}d"] = forward.to_numpy()
-
+        metrics[f"ret_{horizon}d"] = forward_return(klines, dates, horizon).to_numpy()
     for horizon in DRAWDOWN_HORIZONS:
-        drawdowns = forward_max_drawdown(
-            klines, pd.DatetimeIndex(metrics["date"]), horizon
-        )
-        metrics[f"dd_{horizon}d"] = drawdowns.to_numpy()
+        metrics[f"dd_{horizon}d"] = forward_max_drawdown(klines, dates, horizon).to_numpy()
+
+    return metrics, klines
+
+
+def run_backtest(
+    csv_path: str | None = None,
+    independent: bool = False,
+    resamples: int = 2000,
+) -> pd.DataFrame:
+    db = DatabaseManager()
+    metrics, klines = load_metrics_with_forwards(db)
+    if metrics.empty or klines.empty:
+        return pd.DataFrame()
 
     summary = summarize(metrics)
     dd_summary = summarize_drawdowns(metrics)

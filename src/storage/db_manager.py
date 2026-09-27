@@ -280,9 +280,9 @@ class DatabaseManager:
             return pd.read_sql_query(query, conn)
 
     def load_fear_greed(self) -> pd.DataFrame:
-        """Load the full Fear & Greed history."""
+        """Load the full Fear & Greed history ordered by date."""
         with self._get_connection() as conn:
-            query = "SELECT date, value, classification FROM fear_greed_history"
+            query = "SELECT date, value, classification FROM fear_greed_history ORDER BY date"
             return pd.read_sql_query(query, conn)
 
     def load_fred_series(self, series_id: str = "M2SL") -> pd.DataFrame:

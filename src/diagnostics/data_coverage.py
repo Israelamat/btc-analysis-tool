@@ -88,10 +88,14 @@ def _coverage_record(table: str, label: str, frame: pd.DataFrame) -> dict[str, o
     }
 
 
-def run_report() -> None:
-    db = DatabaseManager()
-    print(f"\n=== Data time range by table ({db.db_path}) ===")
+def collect_coverage(db: DatabaseManager | None = None) -> list[dict[str, object]]:
+    """Return one coverage record per table (or per series/keyword group).
 
+    :param db: database to inspect; a default handle is created when omitted
+    :return: list of dicts with table, label, rows, min_date, max_date,
+        span_days and status ('ok', 'empty', 'no_date' or 'load_error: ...')
+    """
+    db = db or DatabaseManager()
     records = []
     for table in db.TABLE_NAMES:
         frame, load_status = _load_table(db, table)
@@ -121,8 +125,14 @@ def run_report() -> None:
                 records.append(_coverage_record(table, f"{group_col}={key}", subset))
         else:
             records.append(_coverage_record(table, "-", frame))
+    return records
 
-    report = pd.DataFrame(records)
+
+def run_report() -> None:
+    db = DatabaseManager()
+    print(f"\n=== Data time range by table ({db.db_path}) ===")
+
+    report = pd.DataFrame(collect_coverage(db))
     print(report.to_string(index=False))
 
     ok = report[report["status"] == "ok"]
