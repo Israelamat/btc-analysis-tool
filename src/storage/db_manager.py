@@ -272,6 +272,50 @@ class DatabaseManager:
             """
             return pd.read_sql_query(query, conn)
 
+    def load_window(
+        self,
+        sql: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+    ) -> tuple[pd.DataFrame, int]:
+        """Run a windowed read over a subquery, filtering and paging in SQL.
+
+        The whole subquery is never materialized: ``total`` comes from a COUNT
+        over the same window and only the ``limit`` most recent rows are
+        fetched, so a table endpoint does not load its table into pandas.
+
+        :param sql: SELECT whose result set has a ``date`` column (YYYY-MM-DD)
+        :param start: inclusive window start, YYYY-MM-DD
+        :param end: inclusive window end, YYYY-MM-DD
+        :param limit: keep only the most recent rows of the window
+        :return: (rows of the window, oldest first, total rows in the window
+            before the limit)
+        """
+        where = ""
+        params: list = []
+        if start:
+            where += " AND date >= ?"
+            params.append(start)
+        if end:
+            where += " AND date <= ?"
+            params.append(end)
+        where = where or " AND 1=1"
+
+        with self._get_connection() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM ({sql}) WHERE 1=1{where}", params
+            ).fetchone()[0]
+
+            query = f"SELECT * FROM ({sql}) WHERE 1=1{where} ORDER BY date DESC"
+            windowed = list(params)
+            if limit:
+                query += " LIMIT ?"
+                windowed.append(int(limit))
+            frame = pd.read_sql_query(query, conn, params=windowed)
+
+        return frame.iloc[::-1].reset_index(drop=True), int(total)
+
     def load_btc_indicators(self) -> pd.DataFrame:
         """Load all computed indicator series ordered by date."""
         with self._get_connection() as conn:

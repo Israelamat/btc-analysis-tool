@@ -70,6 +70,11 @@ TRENDS_KEYWORD = "bitcoin"
 TABLE_SOURCES: dict[str, dict] = {
     "scores": {
         "table": "metrics_history",
+        "sql": (
+            "SELECT date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, "
+            "sp500, nasdaq, dxy, macd_hist, google_trends, total_score, zone "
+            "FROM metrics_history"
+        ),
         "columns": (
             "date",
             "btc_price",
@@ -85,15 +90,20 @@ TABLE_SOURCES: dict[str, dict] = {
             "total_score",
             "zone",
         ),
-        "load": lambda db: db.load_metrics_history(),
     },
     "klines": {
         "table": "btc_klines",
+        "sql": (
+            "SELECT date, open, high, low, close, volume FROM btc_klines"
+        ),
         "columns": ("date", "open", "high", "low", "close", "volume"),
-        "load": lambda db: db.load_btc_klines(),
     },
     "indicators": {
         "table": "btc_indicators",
+        "sql": (
+            "SELECT date, ema_200, rsi_14, macd, macd_signal, macd_hist "
+            "FROM btc_indicators"
+        ),
         "columns": (
             "date",
             "ema_200",
@@ -102,28 +112,35 @@ TABLE_SOURCES: dict[str, dict] = {
             "macd_signal",
             "macd_hist",
         ),
-        "load": lambda db: db.load_btc_indicators(),
     },
     "fear-greed": {
         "table": "fear_greed_history",
+        "sql": (
+            "SELECT date, value, classification FROM fear_greed_history"
+        ),
         "columns": ("date", "value", "classification"),
-        "load": lambda db: db.load_fear_greed(),
     },
     "fred": {
         "table": "fred_series",
+        "sql": (
+            f"SELECT date, value, series_id FROM fred_series "
+            f"WHERE series_id = '{M2_SERIES_ID}'"
+        ),
         "columns": ("date", "value", "series_id"),
-        "load": lambda db: db.load_fred_series(M2_SERIES_ID),
         "extra": {"series_id": M2_SERIES_ID},
     },
     "stocks": {
         "table": "stock_history",
+        "sql": "SELECT date, sp500, nasdaq, dxy FROM stock_history",
         "columns": ("date", "sp500", "nasdaq", "dxy"),
-        "load": lambda db: db.load_stock_history(),
     },
     "google-trends": {
         "table": "google_trends",
+        "sql": (
+            f"SELECT date, value, keyword FROM google_trends "
+            f"WHERE keyword = '{TRENDS_KEYWORD}'"
+        ),
         "columns": ("date", "value", "keyword"),
-        "load": lambda db: db.load_google_trends(TRENDS_KEYWORD),
         "extra": {"keyword": TRENDS_KEYWORD},
     },
 }
@@ -148,6 +165,21 @@ def get_db() -> DatabaseManager:
 def clear_cache() -> None:
     """Drop every memoized backtest/coverage result."""
     _cache.clear()
+
+def _zone_history(zone: str) -> dict | None:
+    """Forward stats of a zone, memoized for the cache TTL.
+
+    Both ``report_from_record`` and ``zone_context`` ask for the same zone on
+    every dashboard request, and each call walks the full metrics history plus
+    the candles, so the result is cached per zone.
+    """
+    if not zone:
+        return None
+    return _cache.get_or_set(
+        f"zone_history:{zone}",
+        lambda: zone_history_stats(get_db(), zone),
+        ttl_seconds=300,
+    )
 
 def table_series(
     source: str,
@@ -175,7 +207,12 @@ def table_series(
         raise KeyError(source)
 
     spec = TABLE_SOURCES[source]
-    frame = spec["load"](get_db())
+    frame, total = get_db().load_window(
+        spec["sql"],
+        start=date or start,
+        end=date or end,
+        limit=int(limit) if limit else None,
+    )
     payload = {
         "source": source,
         "table": spec["table"],
@@ -184,27 +221,11 @@ def table_series(
         "end": end,
         "limit": int(limit) if limit else None,
         "count": 0,
-        "total": 0,
+        "total": int(total),
         "rows": [],
     }
     if frame is None or frame.empty:
         return payload
-
-    frame = frame.copy()
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
-    frame = frame.dropna(subset=["date"]).sort_values("date")
-
-    if date:
-        frame = frame[frame["date"] == pd.Timestamp(date)]
-    else:
-        if start:
-            frame = frame[frame["date"] >= pd.Timestamp(start)]
-        if end:
-            frame = frame[frame["date"] <= pd.Timestamp(end)]
-
-    payload["total"] = int(len(frame))
-    if limit:
-        frame = frame.tail(int(limit))
 
     keep = [column for column in spec["columns"] if column in frame.columns]
     out = frame[keep] if keep else frame
@@ -307,9 +328,7 @@ def report_from_record(record: dict, components: dict | None = None) -> dict:
         "components": jsonable(scores),
         "action": action,
         "ratio": ratio,
-        "zone_history": (
-            jsonable(zone_history_stats(get_db(), zone)) if zone else None
-        ),
+        "zone_history": jsonable(_zone_history(zone)) if zone else None,
     }
 
 
@@ -567,7 +586,7 @@ def zone_context(transitions: int = 8) -> dict | None:
             "ratio": ratio,
             "streak_days": int(current["days"] or 0),
             "streak_start": date_str(current["start"]),
-            "zone_history": jsonable(zone_history_stats(get_db(), zone)) if zone else None,
+            "zone_history": jsonable(_zone_history(zone)) if zone else None,
             "score_trend": _score_trend(frame),
         },
         "previous": _run_payload(runs.iloc[-2]) if len(runs) > 1 else None,
