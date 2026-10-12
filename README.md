@@ -11,6 +11,11 @@
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+![Status: beta](https://img.shields.io/badge/status-beta-orange)
+
+<img src="docs/images/Buy-and-sell-Zones-beta.png" width="520" alt="BTC accumulation score vs price — beta preview: green = High-accumulation buy points, red = Selling zone">
+
+*🧪 Beta preview — buy points (green) and Selling zone (red) over the full price history.*
 
 </div>
 
@@ -47,36 +52,36 @@ Public market dashboards are black boxes. This one is **yours**:
 > ⚠️ **Early stage.** The project acquires and stores the core data from the **main market APIs**, scores it, and now serves it over a **REST API** — everything else is built on top of that foundation.
 
 ```
-                    ┌──────────────────────────────┐
-                    │       DATA SOURCES          │
-                    │  Binance · Alternative.me   │
-                    │  FRED · Yahoo Finance       │
-                    └──────────────┬───────────────┘
-                                   ▼
 ┌───────────────────────────────────────────────────┐
-│              DATA LAYER (src/fetchers/)           │
+│                   DATA SOURCES                    │
+│             Binance · Alternative.me              │
+│               FRED · Yahoo Finance                │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│            DATA LAYER (src/fetchers/)             │
 │   BaseFetcher ──► BTCFetcher                      │
 │                   FearGreedFetcher                │
 │                   FREDFetcher                     │
 │                   StockIndicesFetcher             │
-└───────────────────────┬───────────────────────────┘
-                        ▼
+└─────────────────────────┬─────────────────────────┘
+                          ▼
 ┌───────────────────────────────────────────────────┐
-│          ANALYTICS LAYER (src/analytics/)         │
+│         ANALYTICS LAYER (src/analytics/)          │
 │   indicators.py ──► EMA-200 · RSI-14              │
 │   scoring.py    ──► Composite market score        │
-└───────────────────────┬───────────────────────────┘
-                        ▼
+└─────────────────────────┬─────────────────────────┘
+                          ▼
 ┌───────────────────────────────────────────────────┐
-│            STORAGE LAYER (src/storage/)           │
+│           STORAGE LAYER (src/storage/)            │
 │   db_manager.py ──► SQLite daily metrics history  │
-└───────────────────────┬───────────────────────────┘
-                        ▼
+└─────────────────────────┬─────────────────────────┘
+                          ▼
 ┌───────────────────────────────────────────────────┐
-│              API LAYER (src/api/)                 │
-│   FastAPI ──► /api/dashboard  (one call, 9 blocks) │
-│                /api/refresh    (live pipeline run) │
-│                /api/{stocks,fear-greed,fred,…}    │
+│               API LAYER (src/api/)                │
+│   FastAPI ──► /api/dashboard  (one call, 9 blocks)│
+│               /api/refresh    (live pipeline run) │
+│               /api/{stocks,fear-greed,fred,…}     │
 └───────────────────────────────────────────────────┘
 ```
 
@@ -306,6 +311,9 @@ history with every call highlighted:
 python -m src.analytics.chart --open          # writes reports/buy_points.html
 ```
 
+A **beta preview** sits at the top of this README; run the command above for the
+full-size interactive version.
+
 The page (Chart.js, loaded from a CDN — needs internet when opened) shows:
 
 - **BTC price** on a logarithmic axis with the accumulation **score overlaid**
@@ -373,17 +381,7 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
   - [ ] GDP growth & PMIs
   - [ ] US non-farm payrolls & unemployment
   - [ ] Central bank interest rate decisions
-
-### 🖥️ The Dashboard Era
-- [ ] **Web dashboard** — the REST API is ready; the SPA on top of it is next
-- [ ] Multi-asset watchlist: BTC + ETH + top alts + macro pairs
-- [ ] Interactive candlestick charts with custom indicator overlay
-- [ ] Cross-correlation explorer (BTC vs. macro vs. on-chain)
-- [ ] Custom scoring models — assign your own weights
-- [ ] Alerts (Telegram / email) on signals & macro releases
-- [ ] Mobile-friendly responsive UI
-- [ ] Export to CSV / Excel / JSON
-
+  
 ---
 
 ## 🧰 Tech Stack
@@ -442,23 +440,3 @@ btc-analysis-tool/
     └── utils/
         └── logger.py           # Shared logger setup
 ```
-
----
-
-## 🤝 Contributing
-
-Found a bug, want a new fetcher (derivatives, on-chain, macro), or have a killer indicator idea? Open an **issue** or a **PR** — contributions welcome!
-
----
-
-## 📄 License
-
-MIT
-
----
-
-<div align="center">
-
-**📡 Data first. Signals later. Dashboard soon.**
-
-</div>
