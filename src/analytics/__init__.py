@@ -1,3 +1,3 @@
-"""Analytics: indicators, scoring, backtest and calibration modules."""
+"""Analytics: indicators, scoring, backtest, calibration and chart modules."""
 
-__all__ = ["backtest", "calibrate", "indicators", "scoring"]
+__all__ = ["backtest", "calibrate", "chart", "indicators", "scoring"]

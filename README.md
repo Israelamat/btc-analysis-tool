@@ -297,6 +297,29 @@ forward returns (per signal and per score bin) — the tool used to set the curr
 python -m src.analytics.calibrate
 ```
 
+### 🖼️ Interactive chart of the buy points
+
+To eyeball the model against what BTC actually did, render the full price
+history with every call highlighted:
+
+```bash
+python -m src.analytics.chart --open          # writes reports/buy_points.html
+```
+
+The page (Chart.js, loaded from a CDN — needs internet when opened) shows:
+
+- **BTC price** on a logarithmic axis with the accumulation **score overlaid**
+  on a secondary 0–100 axis.
+- **Green** points/bands on every High-accumulation day (score ≥ 70) and **red**
+  on the Selling zone (score < 30).
+- **Summary cards** comparing High entries against the all-days baseline.
+- A **table** of every High episode (entry/exit, days, max score, price and the
+  forward 7/30/90/180d return, green when positive, red when negative) — losses
+  included, so the model is shown as-is, not cherry-picked.
+
+`--out PATH` changes the destination, and `--horizon DAYS` (default 90) picks
+the horizon used by the summary cards. Output goes to `reports/` (gitignored).
+
 ### Historical depth
 
 | Source | Goes back to |
@@ -323,6 +346,7 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
 - [x] Composite market scoring engine
 - [x] **Backtest validation of the score vs forward returns (8+ years)**
 - [x] **Data-driven weight & zone calibration**
+- [x] **Interactive buy-point chart** (`python -m src.analytics.chart`)
 - [x] SQLite persistence with daily history
 - [x] Standalone fetcher testing via CLI
 - [x] **Read-only REST API over the stored data** (`GET /api/dashboard`, `POST /api/refresh`)
@@ -400,7 +424,8 @@ btc-analysis-tool/
     │   ├── indicators.py       # EMA-200, RSI-14, MACD
     │   ├── scoring.py          # Composite market scoring engine
     │   ├── backtest.py         # Forward-return validation by score zone
-    │   └── calibrate.py        # Per-signal predictive-power diagnostics
+    │   ├── calibrate.py        # Per-signal predictive-power diagnostics
+    │   └── chart.py            # Interactive buy-point chart (HTML + Chart.js)
     ├── diagnostics/
     │   └── data_coverage.py    # Per-table date range and row counts
     ├── fetchers/

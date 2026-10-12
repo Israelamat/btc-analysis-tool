@@ -14,6 +14,7 @@ __pycache__/
 
 data/
 logs/
+reports/
 *.db
 
 .ipynb_checkpoints
