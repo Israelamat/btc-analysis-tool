@@ -115,6 +115,8 @@ A weighted composite of tradable signals, normalized to **0–100**, giving a re
 | Fear & Greed | 3% | Market sentiment |
 | RSI-14 | 2% | Momentum / overbought–oversold |
 
+> 🧩 **Missing signals are never faked.** If a source fails, its component is dropped and the score is renormalized over the available weights (`score = Σ(comp·w) / Σw`). The run reports its **coverage** (share of the weight that was available); when coverage falls below 50% the zone is capped (High → Moderate, Selling → Neutral) so a couple of weak signals can't trigger a strong buy/sell.
+
 ### Zones
 
 | Zone | Score | Mean 90d return (2017→2026) | Win rate | Mean 90d max drawdown |
@@ -338,9 +340,10 @@ the horizon used by the summary cards. Output goes to `reports/` (gitignored).
 | M2 (FRED) | 1959 |
 | Google Trends | 2017-08 (monthly resolution beyond ~5y) |
 
-Days before 2018-02-01 score with a neutral Fear & Greed value (50); the MA/RSI
-indicators need ~200 trading days to warm up. Regenerate the whole history with
-`python -m src.storage.backfill scores`.
+Days before 2018-02-01 (Fear & Greed), 2017-08 (Google Trends) or 2016-09 (DXY)
+have those signals passed as missing and the score renormalized — never filled
+with a neutral. The MA/RSI indicators need ~200 trading days to warm up.
+Regenerate the whole history with `python -m src.storage.backfill scores`.
 
 ---
 

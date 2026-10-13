@@ -72,8 +72,8 @@ TABLE_SOURCES: dict[str, dict] = {
         "table": "metrics_history",
         "sql": (
             "SELECT date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, "
-            "sp500, nasdaq, dxy, macd_hist, google_trends, total_score, zone "
-            "FROM metrics_history"
+            "sp500, nasdaq, dxy, macd_hist, google_trends, total_score, zone, "
+            "coverage FROM metrics_history"
         ),
         "columns": (
             "date",
@@ -89,6 +89,7 @@ TABLE_SOURCES: dict[str, dict] = {
             "google_trends",
             "total_score",
             "zone",
+            "coverage",
         ),
     },
     "klines": {
@@ -311,21 +312,26 @@ def report_from_record(record: dict, components: dict | None = None) -> dict:
     zone = str(jsonable(record.get("zone")) or "")
     action, ratio = ZONE_ACTION.get(zone, ("NO ACTION DEFINED", 0.0))
     scores = components or _components_from_row(record)
+    coverage = _optional_number(record.get("coverage"))
     return {
         "date": date_str(record.get("date")),
         "btc_price": _number(record.get("btc_price")),
         "ema_200": _number(record.get("ema_200")),
         "rsi_14": _number(record.get("rsi_14")),
-        "fear_greed": int(_number(record.get("fear_greed"))),
-        "m2_yoy": _number(record.get("m2_yoy")),
+        "fear_greed": _optional_int(record.get("fear_greed")),
+        "m2_yoy": _optional_number(record.get("m2_yoy")),
         "sp500": jsonable(record.get("sp500")),
         "nasdaq": jsonable(record.get("nasdaq")),
-        "dxy": str(jsonable(record.get("dxy")) or "neutral"),
-        "macd_hist": _number(record.get("macd_hist")),
-        "google_trends": _number(record.get("google_trends")),
+        "dxy": jsonable(record.get("dxy")),
+        "macd_hist": _optional_number(record.get("macd_hist")),
+        "google_trends": _optional_number(record.get("google_trends")),
         "total_score": int(_number(record.get("total_score"))),
         "zone": zone,
         "components": jsonable(scores),
+        "coverage": coverage,
+        "low_confidence": (
+            None if coverage is None else coverage < Config.COVERAGE_MIN
+        ),
         "action": action,
         "ratio": ratio,
         "zone_history": jsonable(_zone_history(zone)) if zone else None,

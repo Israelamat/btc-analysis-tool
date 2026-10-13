@@ -82,11 +82,24 @@ def _asof(frame: pd.DataFrame, column: str, dates: pd.DatetimeIndex) -> pd.Serie
     return src.reindex(dates, method="ffill")
 
 
+def _optional(value, cast=float):
+    """Cast a value, mapping None/NaN/empty to None for nullable columns."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return cast(value)
+
+
 def backfill_scores(db: DatabaseManager) -> None:
     """Backfill daily accumulation scores from the stored history.
 
-    Each date needs real BTC indicators and M2 data; Fear & Greed, DXY and
-    Google Trends fall back to neutral when unavailable.
+    Each date needs real BTC indicators; missing sources (Fear & Greed before
+    2018, Google Trends before 2017, DXY before 2016, ...) are passed as None
+    so the scorer renormalizes instead of assuming a neutral reading.
     """
     indicators = db.load_btc_indicators()
     klines = db.load_btc_klines()
@@ -109,8 +122,8 @@ def backfill_scores(db: DatabaseManager) -> None:
     sp500 = _asof(stocks, "sp500", dates)
     nasdaq = _asof(stocks, "nasdaq", dates)
 
-    fear_greed_val = _asof(fear_greed, "value", dates).fillna(50.0)
-    google_trends_val = _asof(trends, "value", dates).fillna(50.0)
+    fear_greed_val = _asof(fear_greed, "value", dates)
+    google_trends_val = _asof(trends, "value", dates)
 
     m2_series = fred.dropna(subset=["value"]).set_index("date")["value"].sort_index()
     latest = m2_series.reindex(dates, method="ffill")
@@ -120,9 +133,10 @@ def backfill_scores(db: DatabaseManager) -> None:
     dxy_series = stocks.dropna(subset=["dxy"]).set_index("date")["dxy"].sort_index()
     dxy_on_dates = dxy_series.reindex(dates, method="ffill")
     change_pct = (dxy_on_dates / dxy_on_dates.shift(5) - 1) * 100
-    dxy_trend = pd.Series("neutral", index=dates)
+    dxy_trend = pd.Series("neutral", index=dates, dtype=object)
     dxy_trend[change_pct > 0.5] = "bullish"
     dxy_trend[change_pct < -0.5] = "bearish"
+    dxy_trend[dxy_on_dates.isna()] = None
 
     frame = pd.DataFrame(
         {
@@ -139,7 +153,7 @@ def backfill_scores(db: DatabaseManager) -> None:
             "dxy": dxy_trend,
         }
     )
-    frame = frame.dropna(subset=["ema_200", "rsi_14", "m2_yoy"])
+    frame = frame.dropna(subset=["btc_price", "ema_200", "rsi_14"])
 
     scorer = BTCAcumulationScorer()
     saved = 0
@@ -160,18 +174,21 @@ def backfill_scores(db: DatabaseManager) -> None:
                 "btc_price": float(row["btc_price"]),
                 "ema_200": float(row["ema_200"]),
                 "rsi_14": float(row["rsi_14"]),
-                "fear_greed": int(row["fear_greed"]),
-                "m2_yoy": round(float(row["m2_yoy"]), 2),
-                "sp500": None if pd.isna(row["sp500"]) else float(row["sp500"]),
-                "nasdaq": None if pd.isna(row["nasdaq"]) else float(row["nasdaq"]),
-                "dxy": row["dxy"],
-                "macd_hist": round(float(row["macd_hist"]), 4),
-                "google_trends": round(float(row["google_trends"]), 2),
+                "fear_greed": _optional(row["fear_greed"], int),
+                "m2_yoy": _optional(row["m2_yoy"], lambda v: round(float(v), 2)),
+                "sp500": _optional(row["sp500"], float),
+                "nasdaq": _optional(row["nasdaq"], float),
+                "dxy": _optional(row["dxy"], str),
+                "macd_hist": _optional(row["macd_hist"], lambda v: round(float(v), 4)),
+                "google_trends": _optional(
+                    row["google_trends"], lambda v: round(float(v), 2)
+                ),
                 "total_score": result["score"],
                 "zone": result["zone"],
                 "components": json.dumps(
                     result["components"], ensure_ascii=False
                 ),
+                "coverage": result["coverage"],
             }
         )
         saved += 1

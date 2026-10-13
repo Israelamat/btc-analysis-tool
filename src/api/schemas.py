@@ -2,15 +2,19 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 class ReportComponents(BaseModel):
-    """Per-signal sub-scores, 0-100 (higher = more attractive to accumulate)."""
+    """Per-signal sub-scores, 0-100 (higher = more attractive to accumulate).
 
-    google_trends: float
-    macd: float
-    dxy: float
-    m2: float
-    ema_200: float
-    fear_greed: float
-    rsi: float
+    A component is ``None`` on days its source was unavailable; the total score
+    renormalizes over the signals that do have a value.
+    """
+
+    google_trends: float | None = None
+    macd: float | None = None
+    dxy: float | None = None
+    m2: float | None = None
+    ema_200: float | None = None
+    fear_greed: float | None = None
+    rsi: float | None = None
 
 
 class ZoneHistory(BaseModel):
@@ -28,16 +32,29 @@ class BtcReport(BaseModel):
     btc_price: float
     ema_200: float
     rsi_14: float
-    fear_greed: int
-    m2_yoy: float = Field(description="M2 money supply year-over-year growth in %")
+    fear_greed: int | None = None
+    m2_yoy: float | None = Field(
+        default=None, description="M2 money supply year-over-year growth in %"
+    )
     sp500: float | None = None
     nasdaq: float | None = None
-    dxy: str = Field(description="DXY short-term trend: bullish | bearish | neutral")
-    macd_hist: float
-    google_trends: float
+    dxy: str | None = Field(
+        default=None,
+        description="DXY short-term trend: bullish | bearish | neutral | null",
+    )
+    macd_hist: float | None = None
+    google_trends: float | None = None
     total_score: int = Field(ge=0, le=100)
     zone: str
     components: ReportComponents
+    coverage: float | None = Field(
+        default=None,
+        description="Share of the signal weight that was available (0-1)",
+    )
+    low_confidence: bool | None = Field(
+        default=None,
+        description="True when coverage is below Config.COVERAGE_MIN and the zone was capped",
+    )
     zone_history: ZoneHistory | None = Field(
         default=None,
         description="Historical 90d stats for the current zone, when stored",

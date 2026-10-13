@@ -82,6 +82,13 @@ def _print_report(db: DatabaseManager, record: dict, score_result: dict) -> None
     print(f"[+] Precio BTC: ${record['btc_price']:,.2f}")
     print(f"[+] Score de Acumulación: {score_result['score']}/100")
     print(f"[+] Clasificación: {zone}")
+    if score_result.get("low_confidence"):
+        missing = score_result.get("missing") or []
+        print(
+            f"[!] Confianza baja: solo {score_result['coverage']:.0%} de las "
+            f"señales disponibles"
+            + (f" (faltan: {', '.join(missing)})" if missing else "")
+        )
     print(
         "[+] Señales más fuertes: "
         + ", ".join(f"{key}={value:.0f}" for key, value in top)
@@ -139,14 +146,14 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
     stocks_data = StockIndicesFetcher().get_major_indices()
     google_trends_val = GoogleTrendsFetcher().get_latest_value()
     trends_fallback = False
-    if google_trends_val == 50.0:
+    if google_trends_val is None:
         stored = _latest_stored_trends(db)
         if stored is not None:
             google_trends_val = stored
             trends_fallback = True
             logger.info(
                 f"Using stored Google Trends value {stored:.0f} "
-                f"(fetch fell back to neutral)"
+                f"(fresh fetch unavailable)"
             )
 
     logger.info("Calculating technical indicators...")
@@ -174,7 +181,7 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
         rsi=tech_data["rsi"],
         fear_greed=fear_greed_val,
         m2_yoy=m2_growth,
-        dxy_status=stocks_data.get("DXY_trend", "neutral"),
+        dxy_status=stocks_data.get("DXY_trend"),
         macd_hist=tech_data["macd_hist"],
         google_trends=google_trends_val,
     )
@@ -188,12 +195,13 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
         "m2_yoy": m2_growth,
         "sp500": stocks_data.get("SP500"),
         "nasdaq": stocks_data.get("NASDAQ"),
-        "dxy": stocks_data.get("DXY_trend", "neutral"),
+        "dxy": stocks_data.get("DXY_trend"),
         "macd_hist": tech_data["macd_hist"],
         "google_trends": google_trends_val,
         "total_score": score_result["score"],
         "zone": score_result["zone"],
         "components": json.dumps(score_result["components"], ensure_ascii=False),
+        "coverage": score_result["coverage"],
     }
 
     return {
@@ -206,7 +214,7 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
             "stored_indicators": stored_indicators_used,
             "sp500": stocks_data.get("SP500") is not None,
             "nasdaq": stocks_data.get("NASDAQ") is not None,
-            "m2": bool(m2_growth),
+            "m2": m2_growth is not None,
         },
     }
 

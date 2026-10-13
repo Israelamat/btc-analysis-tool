@@ -17,3 +17,8 @@ class Config:
         "rsi": 0.02,
         "fear_greed": 0.03,
     }
+
+    # Minimum share of the total weight that must be available for the score to
+    # be trusted. Below it the zone is capped (High -> Moderate, Selling ->
+    # Neutral) so a couple of weak signals cannot label a strong buy or sell.
+    COVERAGE_MIN: float = float(os.getenv("COVERAGE_MIN", "0.5"))

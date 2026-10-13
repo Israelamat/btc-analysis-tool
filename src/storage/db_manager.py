@@ -45,7 +45,8 @@ class DatabaseManager:
                     google_trends REAL,
                     total_score REAL,
                     zone TEXT,
-                    components TEXT
+                    components TEXT,
+                    coverage REAL
                 );
 
                 CREATE TABLE IF NOT EXISTS btc_klines (
@@ -101,6 +102,7 @@ class DatabaseManager:
                 ("google_trends", "REAL"),
                 ("zone", "TEXT"),
                 ("components", "TEXT"),
+                ("coverage", "REAL"),
             ):
                 if column not in columns:
                     cursor.execute(f"ALTER TABLE metrics_history ADD COLUMN {column} {kind}")
@@ -109,8 +111,8 @@ class DatabaseManager:
     def save_daily_metrics(self, data: dict):
         """Save metrics data to the database (upsert by date)."""
         query = """
-            INSERT INTO metrics_history (date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, sp500, nasdaq, dxy, macd_hist, google_trends, total_score, zone, components)
-            VALUES (:date, :btc_price, :ema_200, :rsi_14, :fear_greed, :m2_yoy, :sp500, :nasdaq, :dxy, :macd_hist, :google_trends, :total_score, :zone, :components)
+            INSERT INTO metrics_history (date, btc_price, ema_200, rsi_14, fear_greed, m2_yoy, sp500, nasdaq, dxy, macd_hist, google_trends, total_score, zone, components, coverage)
+            VALUES (:date, :btc_price, :ema_200, :rsi_14, :fear_greed, :m2_yoy, :sp500, :nasdaq, :dxy, :macd_hist, :google_trends, :total_score, :zone, :components, :coverage)
             ON CONFLICT(date) DO UPDATE SET
                 btc_price=excluded.btc_price,
                 ema_200=excluded.ema_200,
@@ -124,7 +126,8 @@ class DatabaseManager:
                 google_trends=excluded.google_trends,
                 total_score=excluded.total_score,
                 zone=excluded.zone,
-                components=excluded.components;
+                components=excluded.components,
+                coverage=excluded.coverage;
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()

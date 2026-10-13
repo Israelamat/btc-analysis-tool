@@ -45,15 +45,16 @@ class FREDFetcher(BaseFetcher):
             if obs.get("value") not in (None, "") and obs["value"] != "."
         ]
 
-    def get_m2_yoy_growth(self) -> float:
+    def get_m2_yoy_growth(self) -> float | None:
         """Return M2 money supply year-over-year growth in percent.
 
-        Falls back to 0.0 if the data cannot be fetched or is insufficient.
+        Returns None when the data cannot be fetched or is insufficient so the
+        scorer can tell a missing signal apart from a real 0% reading.
         """
         observations = self.fetch_data()
         if len(observations) < 2:
             logger.warning("Not enough M2 observations to compute YoY growth")
-            return 0.0
+            return None
 
         df = pd.DataFrame(observations)
         df["date"] = pd.to_datetime(df["date"])
@@ -62,7 +63,7 @@ class FREDFetcher(BaseFetcher):
 
         if len(df) < 2:
             logger.warning("Not enough valid M2 observations")
-            return 0.0
+            return None
 
         latest = df.iloc[-1]
         target_date = latest["date"] - pd.DateOffset(years=1)
@@ -70,12 +71,12 @@ class FREDFetcher(BaseFetcher):
 
         if past.empty:
             logger.warning("No M2 observation found one year back")
-            return 0.0
+            return None
 
         year_ago_value = past.iloc[-1]["value"]
         if year_ago_value <= 0:
             logger.warning("Invalid M2 base value for YoY computation")
-            return 0.0
+            return None
 
         yoy = (latest["value"] / year_ago_value - 1) * 100
         logger.info(f"M2 YoY growth: {yoy:.2f}% (as of {latest['date'].date()})")

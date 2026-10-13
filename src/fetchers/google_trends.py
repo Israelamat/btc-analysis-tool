@@ -106,15 +106,16 @@ class GoogleTrendsFetcher(BaseFetcher):
         logger.info(f"Fetched {len(rows)} Google Trends records for [{keyword}]")
         return rows
 
-    def get_latest_value(self, keyword: str = "bitcoin") -> float:
+    def get_latest_value(self, keyword: str = "bitcoin") -> float | None:
         """Return the latest Google Trends interest value (0-100).
 
-        Falls back to 50 (neutral) when no data is available.
+        Returns None when no data is available so the scorer can tell a
+        missing signal apart from a genuine neutral (50) reading.
         """
         rows = self.get_history(keyword=keyword, years=1)
         if not rows:
-            logger.warning("Using neutral Google Trends value 50")
-            return 50.0
+            logger.warning("No Google Trends data available")
+            return None
         logger.info(
             f"Google Trends [{keyword}]: {rows[-1]['value']} "
             f"(as of {rows[-1]['date']})"

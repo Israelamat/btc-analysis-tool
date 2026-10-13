@@ -96,9 +96,10 @@ class StockIndicesFetcher(BaseFetcher):
     def get_major_indices(self) -> dict:
         """Return SP500 and NASDAQ latest closes plus DXY short-term trend.
 
-        Uses neutral/None defaults when a source cannot be fetched.
+        Uses None defaults when a source cannot be fetched so the scorer can
+        tell a missing signal apart from a genuine neutral trend.
         """
-        result = {"SP500": None, "NASDAQ": None, "DXY_trend": "neutral"}
+        result = {"SP500": None, "NASDAQ": None, "DXY_trend": None}
 
         for key, symbol in self.TICKERS.items():
             chart = self.fetch_data(symbol)

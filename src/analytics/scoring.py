@@ -1,3 +1,5 @@
+import math
+
 from src.config import Config
 from src.utils.logger import setup_logger
 
@@ -6,6 +8,16 @@ logger = setup_logger()
 
 def _clip(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
+
+
+def _present(value) -> bool:
+    """True when a raw signal value is usable (not None / NaN)."""
+    if value is None:
+        return False
+    try:
+        return not math.isnan(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 class BTCAcumulationScorer:
@@ -26,14 +38,6 @@ class BTCAcumulationScorer:
             )
 
     _COMPONENTS = ("ema_200", "m2", "fear_greed", "rsi", "dxy", "macd", "google_trends")
-
-    @staticmethod
-    def _num(value, default: float) -> float:
-        try:
-            number = float(value)
-            return default if number != number else number
-        except (TypeError, ValueError):
-            return default
 
     @staticmethod
     def _normalize(weights: dict[str, float]) -> dict[str, float]:
@@ -92,25 +96,40 @@ class BTCAcumulationScorer:
         return _clip(100 - value)
 
     def _component_scores(self, **kwargs) -> dict[str, float]:
-        return {
-            "ema_200": self._score_ema_200(
-                self._num(kwargs.get("current_price"), 0.0),
-                self._num(kwargs.get("ema_200"), 0.0),
-            ),
-            "m2": self._score_m2(self._num(kwargs.get("m2_yoy"), 0.0)),
-            "fear_greed": self._score_fear_greed(
-                self._num(kwargs.get("fear_greed"), 50.0)
-            ),
-            "rsi": self._score_rsi(self._num(kwargs.get("rsi"), 50.0)),
-            "dxy": self._score_dxy(kwargs.get("dxy_status")),
-            "macd": self._score_macd(
-                self._num(kwargs.get("macd_hist"), 0.0),
-                self._num(kwargs.get("current_price"), 0.0),
-            ),
-            "google_trends": self._score_google_trends(
-                self._num(kwargs.get("google_trends"), 50.0)
-            ),
-        }
+        """Score only the signals that are actually available.
+
+        A signal is missing when its raw value is None/NaN; a missing signal is
+        left out of the dict so :meth:`calculate` can renormalize over the
+        available weights instead of feeding it a fabricated neutral value.
+        """
+        scores: dict[str, float] = {}
+        price = kwargs.get("current_price")
+        has_price = _present(price) and float(price) > 0
+
+        ema_200 = kwargs.get("ema_200")
+        if has_price and _present(ema_200) and float(ema_200) > 0:
+            scores["ema_200"] = self._score_ema_200(float(price), float(ema_200))
+
+        macd_hist = kwargs.get("macd_hist")
+        if has_price and _present(macd_hist):
+            scores["macd"] = self._score_macd(float(macd_hist), float(price))
+
+        if _present(kwargs.get("m2_yoy")):
+            scores["m2"] = self._score_m2(float(kwargs["m2_yoy"]))
+        if _present(kwargs.get("fear_greed")):
+            scores["fear_greed"] = self._score_fear_greed(
+                float(kwargs["fear_greed"])
+            )
+        if _present(kwargs.get("rsi")):
+            scores["rsi"] = self._score_rsi(float(kwargs["rsi"]))
+        dxy_status = kwargs.get("dxy_status")
+        if isinstance(dxy_status, str) and dxy_status:
+            scores["dxy"] = self._score_dxy(dxy_status)
+        if _present(kwargs.get("google_trends")):
+            scores["google_trends"] = self._score_google_trends(
+                float(kwargs["google_trends"])
+            )
+        return scores
 
     @staticmethod
     def _classify(score: float) -> str:
@@ -122,21 +141,42 @@ class BTCAcumulationScorer:
             return "Neutral zone"
         return "Selling zone"
 
+    @staticmethod
+    def _cap_zone(zone: str) -> str:
+        """Softest allowed zone when the coverage is too low to trust.
+
+        Keeps the strongest calls (High accumulation, Selling) out of reach
+        when too little of the signal weight is available.
+        """
+        if zone == "High accumulation zone":
+            return "Moderate accumulation zone"
+        if zone == "Selling zone":
+            return "Neutral zone"
+        return zone
+
     def calculate(
         self,
-        current_price: float,
-        ema_200: float,
-        rsi: float,
-        fear_greed: float,
-        m2_yoy: float,
-        dxy_status: str,
-        macd_hist: float = 0.0,
-        google_trends: float = 50.0,
+        current_price: float | None,
+        ema_200: float | None,
+        rsi: float | None,
+        fear_greed: float | None,
+        m2_yoy: float | None,
+        dxy_status: str | None,
+        macd_hist: float | None = None,
+        google_trends: float | None = None,
     ) -> dict:
         """Calculate the accumulation score and its zone.
 
-        :return: dict with 'score' (int, 0-100), 'zone' (str) and
-            'components' (dict of per-signal scores, 0-100)
+        Missing signals (None/NaN) are dropped and the weights renormalized
+        over what is available, so the score never goes dark because one source
+        failed. ``coverage`` reports the share of the weight that was actually
+        used; below ``Config.COVERAGE_MIN`` the zone is capped (High ->
+        Moderate, Selling -> Neutral) and ``low_confidence`` is set.
+
+        :return: dict with 'score' (int, 0-100), 'zone' (str, after the cap),
+            'raw_zone' (str, before the cap), 'components' (available per-signal
+            scores, 0-100), 'missing' (list), 'coverage' (0-1) and
+            'low_confidence' (bool)
         """
         components = self._component_scores(
             current_price=current_price,
@@ -149,16 +189,36 @@ class BTCAcumulationScorer:
             google_trends=google_trends,
         )
 
-        score = sum(components[key] * self.weights[key] for key in components)
-        score = int(round(_clip(score)))
+        missing = [key for key in self._COMPONENTS if key not in components]
+        coverage = sum(self.weights[key] for key in components)
+        if components and coverage > 0:
+            weighted = sum(
+                components[key] * self.weights[key] for key in components
+            )
+            raw_score = weighted / coverage
+        else:
+            raw_score = 50.0
+        score = int(round(_clip(raw_score)))
+
+        raw_zone = self._classify(score)
+        low_confidence = coverage < Config.COVERAGE_MIN
+        zone = self._cap_zone(raw_zone) if low_confidence else raw_zone
 
         logger.info(
             f"Score components: "
             + ", ".join(f"{key}={components[key]:.0f}" for key in components)
-            + f" -> total {score}/100 ({self._classify(score)})"
+            + f" -> total {score}/100 ({zone}) "
+            + f"[coverage={coverage:.2f}"
+            + (f", missing={','.join(missing)}" if missing else "")
+            + (", low_confidence" if low_confidence else "")
+            + "]"
         )
         return {
             "score": score,
-            "zone": self._classify(score),
+            "zone": zone,
+            "raw_zone": raw_zone,
             "components": {key: round(value, 1) for key, value in components.items()},
+            "missing": missing,
+            "coverage": round(coverage, 3),
+            "low_confidence": low_confidence,
         }

@@ -30,8 +30,12 @@ class FearGreedFetcher(BaseFetcher):
         logger.warning("Empty response from of  Fear & Greed API")
         return []
 
-    def get_latest_score(self) -> int:
-        """Return the latest Fear & Greed Index value."""
+    def get_latest_score(self) -> int | None:
+        """Return the latest Fear & Greed Index value.
+
+        Returns None when no data is available so the scorer can tell a
+        missing signal apart from a genuine neutral (50) reading.
+        """
         data = self.fetch_data(limit=1)
         if data:
             val = int(data[0]["value"])
@@ -41,10 +45,8 @@ class FearGreedFetcher(BaseFetcher):
             )
             return val
 
-        logger.warning(
-            "Using default value for Fear & Greed Index (50) since no data was found"
-        )
-        return 50
+        logger.warning("No Fear & Greed data available")
+        return None
 
     def get_history(self, limit: int = 0) -> list[dict]:
         """Return the Fear & Greed history as date/value/classification dicts.
