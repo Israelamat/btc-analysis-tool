@@ -19,6 +19,17 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger()
 
+
+def _optional_float(value) -> float | None:
+    """Coerce a value to float, mapping None/NaN/empty to None."""
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(result) else result
+
 # Buy action per score zone (share of the planned monthly investment to deploy).
 ZONE_ACTION = {
     "High accumulation zone": ("COMPRA FUERTE", 1.0),
@@ -169,6 +180,14 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
     logger.info("Calculating technical indicators...")
     tech_data = calculate_technical_indicators(btc_df)
 
+    # On-chain valuation proxies come off the freshly recomputed series (its
+    # last row is today, since the current candle was upserted above).
+    proxy_mvrv = None
+    proxy_nupl = None
+    if not indicator_series.empty and "mvrv" in indicator_series.columns:
+        proxy_mvrv = _optional_float(indicator_series["mvrv"].iloc[-1])
+        proxy_nupl = _optional_float(indicator_series["nupl"].iloc[-1])
+
     # Prefer indicators from the full stored history (backfill) so today's
     # score is consistent with the historical series.
     stored_indicators = db.load_btc_indicators()
@@ -194,6 +213,8 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
         dxy_status=stocks_data.get("DXY_trend"),
         macd_hist=tech_data["macd_hist"],
         google_trends=google_trends_val,
+        proxy_mvrv=proxy_mvrv,
+        proxy_nupl=proxy_nupl,
     )
 
     record = {

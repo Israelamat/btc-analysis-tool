@@ -13,9 +13,9 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 ![Status: beta](https://img.shields.io/badge/status-beta-orange)
 
-<img src="docs/images/Buy-and-sell-Zones-beta.png" width="520" alt="BTC accumulation score vs price — beta preview: green = High-accumulation buy points, red = Selling zone">
+<img src="docs/images/Buy-and-sell-Zones-beta.png" width="520" alt="BTC accumulation score vs price — beta preview (on-chain-rebalanced model): green = High-accumulation buy points, red = Selling zone">
 
-*🧪 Beta preview — buy points (green) and Selling zone (red) over the full price history.*
+*🧪 Beta preview, rebalanced on-chain (Oct 2026 — Google Trends cut from 60% to 12%): buy points (green) and Selling zone (red) over the full price history.*
 
 </div>
 
@@ -103,17 +103,25 @@ Public market dashboards are black boxes. This one is **yours**:
 
 A weighted composite of tradable signals, normalized to **0–100**, giving a read of how attractive the current market setup is:
 
-> ⚙️ Weights were **calibrated empirically** against 8+ years of BTC forward returns (see [Backtesting & Calibration](#-backtesting--calibration)). The classic dip-buying signals (Fear & Greed, RSI oversold, below-EMA-200) proved *noise-to-negative* at a 90-day horizon, while retail disinterest (Google Trends) and momentum carry real signal.
+> ⚙️ Weights are an **on-chain-anchored design**: 40% on the Price/SMA-365 valuation
+> proxies (`proxy_mvrv` + `proxy_nupl`), 28% technical, 15% macro/liquidity and 17%
+> retail sentiment. This replaced an earlier empirically-calibrated mix (Google
+> Trends 60%). `calibrate` still reports the per-component correlation with forward
+> returns; note that on the 2017→2026 sample the current mix shows a **total
+> correlation ≈ 0** — the model intentionally favours "what the cycle's cost basis
+> says" over "which signals best predicted the past". See [Backtesting & Calibration](#-backtesting--calibration).
 
 | Signal | Weight | Logic |
 |-------:|-------:|-------|
-| Google Trends | 60% | Retail disinterest ⇒ accumulation (strongest signal) |
-| MACD histogram | 16% | Momentum / trend reversal |
+| proxy_mvrv (Price/SMA-365) | 25% | Price under the 365-session average ⇒ cheaper |
+| proxy_nupl (1 − 1/MVRV) | 15% | Unrealized losses ⇒ capitulation, better to buy |
+| MACD histogram | 13% | Momentum / trend reversal |
+| Google Trends | 12% | Retail disinterest (contrarian) |
+| EMA-200 | 10% | Price vs. long-term trend |
 | DXY trend | 10% | Dollar strength vs. risk assets |
+| RSI-14 | 5% | Momentum / overbought–oversold |
+| Fear & Greed | 5% | Market sentiment |
 | M2 money supply | 5% | Liquidity conditions |
-| EMA-200 | 4% | Price vs. long-term trend |
-| Fear & Greed | 3% | Market sentiment |
-| RSI-14 | 2% | Momentum / overbought–oversold |
 
 > 🧩 **Missing signals are never faked.** If a source fails, its component is dropped and the score is renormalized over the available weights (`score = Σ(comp·w) / Σw`). The run reports its **coverage** (share of the weight that was available); when coverage falls below 50% the zone is capped (High → Moderate, Selling → Neutral) so a couple of weak signals can't trigger a strong buy/sell.
 
@@ -121,10 +129,10 @@ A weighted composite of tradable signals, normalized to **0–100**, giving a re
 
 | Zone | Score | Mean 90d return (2017→2026) | Win rate | Mean 90d max drawdown |
 |------|-------:|------------------------------:|---------:|----------------------:|
-| **High accumulation** | ≥ 70 | +35.2% | 63.6% | −25.8% |
-| **Moderate accumulation** | 50–69 | +15.0% | 56.0% | −24.4% |
-| **Neutral** | 30–49 | +0.9% | 44.8% | −27.6% |
-| **Selling zone** | < 30 | −11.5% | 31.2% | −35.4% |
+| **High accumulation** | ≥ 70 | +11.4% | 49.9% | −24.5% |
+| **Moderate accumulation** | 50–69 | +21.0% | 51.4% | −29.4% |
+| **Neutral** | 30–49 | +21.8% | 63.1% | −24.2% |
+| **Selling zone** | < 30 | +10.2% | 51.5% | −25.2% |
 
 ---
 
@@ -254,7 +262,8 @@ source), `config`, `backtest` (forward return per zone and horizon), `calibratio
   "dxy": "bullish", "macd_hist": 222.81, "google_trends": 29.0,
   "total_score": 63, "zone": "Moderate accumulation zone",
   "components": { "google_trends": 71, "macd": 100, "dxy": 0, "m2": 70.8,
-                  "ema_200": 5, "fear_greed": 30, "rsi": 12 },
+                  "ema_200": 5, "fear_greed": 30, "rsi": 12,
+                  "proxy_mvrv": 39, "proxy_nupl": 42 },
   "zone_history": { "n": 1667, "mean": 14.87, "win": 55.97 },
   "action": "COMPRA NORMAL (DCA)", "ratio": 0.5, "source": "stored"
 }
@@ -330,7 +339,7 @@ The page (Chart.js, loaded from a CDN — needs internet when opened) shows:
 
 - **BTC price** on a logarithmic axis with the accumulation **score overlaid**
   on a secondary 0–100 axis.
-- **Green** points/bands on every High-accumulation day (score ≥ 70) and **red**
+- **Green** points/bands on every High-accumulation day (score ≥ 80) and **red**
   on the Selling zone (score < 30).
 - **Summary cards** comparing High entries against the all-days baseline.
 - A **table** of every High episode (entry/exit, days, max score, price and the

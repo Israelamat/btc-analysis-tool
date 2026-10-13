@@ -9,7 +9,7 @@ from src.analytics.backtest import (
     summarize,
 )
 from src.analytics.calibrate import collect_calibration
-from src.analytics.scoring import BTCAcumulationScorer
+from src.analytics.scoring import BTCAcumulationScorer, valuation_score
 from src.api.cache import TTLCache
 from src.api.params import DEFAULT_LIMIT
 from src.api.serializers import date_str, jsonable, records
@@ -60,6 +60,22 @@ COMPONENT_META = {
     "rsi": {
         "tag": "Oversold",
         "description": "Oversold (low RSI) is better for accumulating.",
+        "contrarian": True,
+    },
+    "proxy_mvrv": {
+        "tag": "Valuation",
+        "description": (
+            "A price below its 365-session average (MVRV < 1) is cheaper, "
+            "the core on-chain anchor of the cycle."
+        ),
+        "contrarian": True,
+    },
+    "proxy_nupl": {
+        "tag": "On-chain psychology",
+        "description": (
+            "Unrealized losses (negative NUPL) point to capitulation, "
+            "unrealized gains to euphoria: contrarian."
+        ),
         "contrarian": True,
     },
 }
@@ -662,15 +678,11 @@ def macro_snapshot() -> dict:
 def _valuation_score(ratio: float | None) -> int | None:
     """Map the Price/SMA-365 ratio to a display score (0-100, higher = cheaper).
 
-    Purely informational: a linear, saturating normalization around
-    ``Config.VALUATION_RATIO_CENTER`` with ``Config.VALUATION_RATIO_SPAN`` ratio
-    units to saturation. It is not part of the accumulation score.
+    Same symmetric, saturating normalization as the proxy_mvrv score
+    component (``Config.VALUATION_RATIO_CENTER`` / ``Config.VALUATION_RATIO_SPAN``)
+    via the shared helper in ``scoring``.
     """
-    if ratio is None:
-        return None
-    span = Config.VALUATION_RATIO_SPAN or 1.0
-    raw = 50 - (ratio - Config.VALUATION_RATIO_CENTER) * (50 / span)
-    return int(round(max(0.0, min(100.0, raw))))
+    return valuation_score(ratio)
 
 
 def _valuation_row(row) -> dict:

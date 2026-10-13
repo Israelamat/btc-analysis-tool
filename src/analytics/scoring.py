@@ -20,6 +20,26 @@ def _present(value) -> bool:
         return False
 
 
+def valuation_score(
+    value: float | None,
+    center: float | None = None,
+    span: float | None = None,
+) -> int | None:
+    """Map a valuation reading to a 0-100 score (higher = cheaper/better).
+
+    Symmetric, saturating linear normalization: ``center`` maps to the neutral
+    50, ``center - span`` to 100 and ``center + span`` to 0. Defaults to the
+    Price/SMA-365 anchors from ``Config``; the NUPL components pass their own
+    ``Config.NUPL_CENTER`` / ``Config.NUPL_SPAN``.
+    """
+    if value is None:
+        return None
+    center = Config.VALUATION_RATIO_CENTER if center is None else center
+    span = Config.VALUATION_RATIO_SPAN if span is None else (span or 1.0)
+    raw = 50 - (value - center) * (50 / span)
+    return int(round(max(0.0, min(100.0, raw))))
+
+
 class BTCAcumulationScorer:
     """Scores how attractive BTC accumulation looks right now (0-100)."""
 
@@ -37,7 +57,17 @@ class BTCAcumulationScorer:
                 f"Ignoring unknown score weights: {missing}"
             )
 
-    _COMPONENTS = ("ema_200", "m2", "fear_greed", "rsi", "dxy", "macd", "google_trends")
+    _COMPONENTS = (
+        "proxy_mvrv",
+        "proxy_nupl",
+        "ema_200",
+        "m2",
+        "fear_greed",
+        "rsi",
+        "dxy",
+        "macd",
+        "google_trends",
+    )
 
     @staticmethod
     def _normalize(weights: dict[str, float]) -> dict[str, float]:
@@ -95,6 +125,29 @@ class BTCAcumulationScorer:
         """High search interest => retail euphoria => contrarian penalty."""
         return _clip(100 - value)
 
+    @staticmethod
+    def _score_proxy_mvrv(mvrv: float) -> float:
+        """Price/MVRV under its 365-session average => cheaper accumulation.
+
+        Reuses the same neutral anchor and saturation span as the
+        ``/api/valuation`` display score: 50 at MVRV = 1.0, 100 at 0.7, 0 at
+        1.3.
+        """
+        score = valuation_score(mvrv)
+        return 50.0 if score is None else float(score)
+
+    @staticmethod
+    def _score_proxy_nupl(nupl: float) -> float:
+        """Unrealized losses (negative NUPL) => capitulation => better to buy.
+
+        Symmetric around ``Config.NUPL_CENTER`` (0.0) with
+        ``Config.NUPL_SPAN`` (0.4) to saturation: -0.4 -> 100, +0.4 -> 0.
+        """
+        score = valuation_score(
+            nupl, center=Config.NUPL_CENTER, span=Config.NUPL_SPAN
+        )
+        return 50.0 if score is None else float(score)
+
     def _component_scores(self, **kwargs) -> dict[str, float]:
         """Score only the signals that are actually available.
 
@@ -128,6 +181,14 @@ class BTCAcumulationScorer:
         if _present(kwargs.get("google_trends")):
             scores["google_trends"] = self._score_google_trends(
                 float(kwargs["google_trends"])
+            )
+        if _present(kwargs.get("proxy_mvrv")) and float(kwargs["proxy_mvrv"]) > 0:
+            scores["proxy_mvrv"] = self._score_proxy_mvrv(
+                float(kwargs["proxy_mvrv"])
+            )
+        if _present(kwargs.get("proxy_nupl")):
+            scores["proxy_nupl"] = self._score_proxy_nupl(
+                float(kwargs["proxy_nupl"])
             )
         return scores
 
@@ -164,6 +225,8 @@ class BTCAcumulationScorer:
         dxy_status: str | None,
         macd_hist: float | None = None,
         google_trends: float | None = None,
+        proxy_mvrv: float | None = None,
+        proxy_nupl: float | None = None,
     ) -> dict:
         """Calculate the accumulation score and its zone.
 
@@ -187,6 +250,8 @@ class BTCAcumulationScorer:
             dxy_status=dxy_status,
             macd_hist=macd_hist,
             google_trends=google_trends,
+            proxy_mvrv=proxy_mvrv,
+            proxy_nupl=proxy_nupl,
         )
 
         missing = [key for key in self._COMPONENTS if key not in components]

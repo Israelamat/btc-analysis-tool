@@ -148,6 +148,8 @@ def backfill_scores(db: DatabaseManager) -> None:
             "ema_200": pd.Series(indicators["ema_200"].array, index=dates),
             "rsi_14": pd.Series(indicators["rsi_14"].array, index=dates),
             "macd_hist": pd.Series(indicators["macd_hist"].array, index=dates),
+            "mvrv": pd.Series(indicators["mvrv"].array, index=dates),
+            "nupl": pd.Series(indicators["nupl"].array, index=dates),
             "fear_greed": fear_greed_val,
             "m2_yoy": m2_yoy,
             "sp500": sp500,
@@ -170,6 +172,8 @@ def backfill_scores(db: DatabaseManager) -> None:
             dxy_status=row["dxy"],
             macd_hist=row["macd_hist"],
             google_trends=row["google_trends"],
+            proxy_mvrv=row["mvrv"],
+            proxy_nupl=row["nupl"],
         )
         db.save_daily_metrics(
             {

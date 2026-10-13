@@ -15,6 +15,8 @@ class ReportComponents(BaseModel):
     ema_200: float | None = None
     fear_greed: float | None = None
     rsi: float | None = None
+    proxy_mvrv: float | None = None
+    proxy_nupl: float | None = None
 
 
 class ZoneHistory(BaseModel):

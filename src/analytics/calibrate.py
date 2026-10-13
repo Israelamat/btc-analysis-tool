@@ -15,7 +15,17 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger()
 
-COMPONENTS = ("ema_200", "m2", "fear_greed", "rsi", "dxy", "macd", "google_trends")
+COMPONENTS = (
+    "proxy_mvrv",
+    "proxy_nupl",
+    "ema_200",
+    "m2",
+    "fear_greed",
+    "rsi",
+    "dxy",
+    "macd",
+    "google_trends",
+)
 HORIZON = 90
 
 SCORE_BIN_EDGES = tuple(range(0, 101, 10))
