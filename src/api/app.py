@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from src.api.routers import dashboard, history, meta, report
+from src.api.routers import dashboard, history, meta, report, valuation
 from src.utils.logger import setup_logger
 
 logger = setup_logger()
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     application.include_router(meta.router, prefix=API_PREFIX)
     application.include_router(history.router, prefix=API_PREFIX)
     application.include_router(report.router, prefix=API_PREFIX)
+    application.include_router(valuation.router, prefix=API_PREFIX)
 
     _register_index(application)
     _register_error_handlers(application)

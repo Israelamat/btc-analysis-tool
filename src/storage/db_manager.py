@@ -87,26 +87,51 @@ class DatabaseManager:
 
                 CREATE TABLE IF NOT EXISTS btc_indicators (
                     date TEXT PRIMARY KEY,
+                    close REAL,
                     ema_200 REAL,
                     rsi_14 REAL,
                     macd REAL,
                     macd_signal REAL,
-                    macd_hist REAL
+                    macd_hist REAL,
+                    sma_365 REAL,
+                    mvrv REAL,
+                    nupl REAL
                 );
             """
             )
-            columns = [row[1] for row in cursor.execute("PRAGMA table_info(metrics_history)")]
-            for column, kind in (
-                ("dxy", "TEXT"),
-                ("macd_hist", "REAL"),
-                ("google_trends", "REAL"),
-                ("zone", "TEXT"),
-                ("components", "TEXT"),
-                ("coverage", "REAL"),
-            ):
-                if column not in columns:
-                    cursor.execute(f"ALTER TABLE metrics_history ADD COLUMN {column} {kind}")
+            self._migrate(
+                cursor,
+                "metrics_history",
+                (
+                    ("dxy", "TEXT"),
+                    ("macd_hist", "REAL"),
+                    ("google_trends", "REAL"),
+                    ("zone", "TEXT"),
+                    ("components", "TEXT"),
+                    ("coverage", "REAL"),
+                ),
+            )
+            self._migrate(
+                cursor,
+                "btc_indicators",
+                (
+                    ("close", "REAL"),
+                    ("sma_365", "REAL"),
+                    ("mvrv", "REAL"),
+                    ("nupl", "REAL"),
+                ),
+            )
             conn.commit()
+
+    @staticmethod
+    def _migrate(cursor, table: str, columns: tuple[tuple[str, str], ...]) -> None:
+        """Add any missing columns to an existing table (in-place migration)."""
+        existing = [
+            row[1] for row in cursor.execute(f"PRAGMA table_info({table})")
+        ]
+        for column, kind in columns:
+            if column not in existing:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     def save_daily_metrics(self, data: dict):
         """Save metrics data to the database (upsert by date)."""
@@ -247,18 +272,31 @@ class DatabaseManager:
         return len(rows)
 
     def upsert_btc_indicators(self, df: pd.DataFrame) -> int:
-        """Upsert indicator series (EMA-200/RSI-14/MACD), returning the row count."""
+        """Upsert the indicator series (close/EMA-200/RSI/MACD/SMA-365/MVRV/NUPL)."""
         if df is None or df.empty:
             return 0
-        columns = ("date", "ema_200", "rsi_14", "macd", "macd_signal", "macd_hist")
+        columns = (
+            "date",
+            "close",
+            "ema_200",
+            "rsi_14",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "sma_365",
+            "mvrv",
+            "nupl",
+        )
         rows = self._df_to_rows(df, columns)
         query = """
-            INSERT INTO btc_indicators (date, ema_200, rsi_14, macd, macd_signal, macd_hist)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO btc_indicators (date, close, ema_200, rsi_14, macd, macd_signal, macd_hist, sma_365, mvrv, nupl)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(date) DO UPDATE SET
+                close=excluded.close,
                 ema_200=excluded.ema_200, rsi_14=excluded.rsi_14,
                 macd=excluded.macd, macd_signal=excluded.macd_signal,
-                macd_hist=excluded.macd_hist;
+                macd_hist=excluded.macd_hist, sma_365=excluded.sma_365,
+                mvrv=excluded.mvrv, nupl=excluded.nupl;
         """
         with self._get_connection() as conn:
             conn.executemany(query, rows)

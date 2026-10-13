@@ -273,6 +273,45 @@ class CalibrationResponse(BaseModel):
     note: str | None = None
 
 
+class ValuationRow(BaseModel):
+    """One day of the Price/SMA-365 valuation series.
+
+    ``ratio`` and ``score`` are ``None`` until 365 sessions of history exist.
+    """
+
+    date: str | None = None
+    close: float | None = None
+    sma_365: float | None = None
+    ratio: float | None = Field(
+        default=None, description="Price divided by its 365-session average"
+    )
+    score: int | None = Field(
+        default=None, description="Display score 0-100 (higher = cheaper)"
+    )
+
+
+class ValuationSample(BaseModel):
+    """Stored history the valuation series was computed from."""
+
+    start: str | None = None
+    end: str | None = None
+    days: int
+
+
+class ValuationResponse(BaseModel):
+    """Contract of `GET /api/valuation`: latest ratio plus its recent series."""
+
+    as_of: str | None = None
+    close: float | None = None
+    sma_365: float | None = None
+    ratio: float | None = None
+    score: int | None = Field(
+        default=None, description="Display score 0-100 (higher = cheaper)"
+    )
+    sample: ValuationSample
+    history: list[ValuationRow] = Field(default_factory=list)
+
+
 class DashboardResponse(BaseModel):
     """Contract of `GET /api/dashboard`: every first-paint section at once.
 

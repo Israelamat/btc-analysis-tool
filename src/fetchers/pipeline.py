@@ -4,7 +4,10 @@ from datetime import datetime
 import pandas as pd
 
 from src.analytics.backtest import _load_klines, forward_return
-from src.analytics.indicators import calculate_technical_indicators
+from src.analytics.indicators import (
+    calculate_indicator_series,
+    calculate_technical_indicators,
+)
 from src.analytics.scoring import BTCAcumulationScorer
 from src.fetchers.btc_binance import BTCFetcher
 from src.fetchers.fear_greed import FearGreedFetcher
@@ -140,6 +143,13 @@ def collect_market_snapshot(db: DatabaseManager) -> dict | None:
     # this table, and today is only stored in metrics_history otherwise.
     saved_candles = db.upsert_btc_klines(btc_df)
     logger.info(f"Stored {saved_candles} BTC candles")
+
+    # Recompute the indicator series (incl. SMA-365, which needs the full
+    # history) so a daily run keeps btc_indicators in step with btc_klines.
+    indicator_series = calculate_indicator_series(db.load_btc_klines())
+    if not indicator_series.empty:
+        saved_indicators = db.upsert_btc_indicators(indicator_series)
+        logger.info(f"Stored {saved_indicators} indicator rows")
 
     fear_greed_val = FearGreedFetcher().get_latest_score()
     m2_growth = FREDFetcher().get_m2_yoy_growth()

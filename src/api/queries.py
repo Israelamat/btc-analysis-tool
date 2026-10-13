@@ -102,16 +102,20 @@ TABLE_SOURCES: dict[str, dict] = {
     "indicators": {
         "table": "btc_indicators",
         "sql": (
-            "SELECT date, ema_200, rsi_14, macd, macd_signal, macd_hist "
-            "FROM btc_indicators"
+            "SELECT date, close, ema_200, rsi_14, macd, macd_signal, macd_hist, "
+            "sma_365, mvrv, nupl FROM btc_indicators"
         ),
         "columns": (
             "date",
+            "close",
             "ema_200",
             "rsi_14",
             "macd",
             "macd_signal",
             "macd_hist",
+            "sma_365",
+            "mvrv",
+            "nupl",
         ),
     },
     "fear-greed": {
@@ -654,6 +658,76 @@ def macro_snapshot() -> dict:
             "as_of": date_str(trends["date"].iloc[-1]) if not trends.empty else None,
         },
     }
+
+def _valuation_score(ratio: float | None) -> int | None:
+    """Map the Price/SMA-365 ratio to a display score (0-100, higher = cheaper).
+
+    Purely informational: a linear, saturating normalization around
+    ``Config.VALUATION_RATIO_CENTER`` with ``Config.VALUATION_RATIO_SPAN`` ratio
+    units to saturation. It is not part of the accumulation score.
+    """
+    if ratio is None:
+        return None
+    span = Config.VALUATION_RATIO_SPAN or 1.0
+    raw = 50 - (ratio - Config.VALUATION_RATIO_CENTER) * (50 / span)
+    return int(round(max(0.0, min(100.0, raw))))
+
+
+def _valuation_row(row) -> dict:
+    """One day of the valuation series: close, SMA-365, ratio and its score."""
+    close = _optional_number(row.get("close"))
+    sma = _optional_number(row.get("sma_365"))
+    ratio = round(close / sma, 4) if close and sma else None
+    return {
+        "date": date_str(row.get("date")),
+        "close": None if close is None else round(close, 2),
+        "sma_365": None if sma is None else round(sma, 2),
+        "ratio": ratio,
+        "score": _valuation_score(ratio),
+    }
+
+
+def valuation_ratio(days: int = 365) -> dict:
+    """Price / SMA-365 valuation ratio (a homemade MVRV) and its 0-100 score.
+
+    A ratio below 1 means the price sits under its 365-session average (cheap);
+    above 1 means it trades at a premium. The first 364 sessions have no
+    complete SMA-365, so their ``ratio``/``score`` are ``None``.
+
+    :param days: length of the trailing series to include
+    :return: dict with the latest valid reading, a sample summary and the series
+    """
+    frame = _filter_window(get_db().load_btc_indicators(), days=days)
+    empty = {
+        "as_of": None,
+        "close": None,
+        "sma_365": None,
+        "ratio": None,
+        "score": None,
+        "sample": {"start": None, "end": None, "days": 0},
+        "history": [],
+    }
+    if frame.empty:
+        return empty
+
+    history = [_valuation_row(row) for _, row in frame.iterrows()]
+    current = next(
+        (item for item in reversed(history) if item["ratio"] is not None), None
+    )
+    return {
+        "as_of": current["date"] if current else None,
+        "close": current["close"] if current else None,
+        "sma_365": current["sma_365"] if current else None,
+        "ratio": current["ratio"] if current else None,
+        "score": current["score"] if current else None,
+        "sample": {
+            "start": date_str(frame["date"].min()),
+            "end": date_str(frame["date"].max()),
+            "days": int(len(frame)),
+        },
+        "history": history,
+    }
+
 
 def _backtest_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     return _cache.get_or_set(

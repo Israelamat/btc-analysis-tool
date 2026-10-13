@@ -118,14 +118,32 @@ def _rsi_series(series: pd.Series, period: int = 14) -> pd.Series:
 def calculate_indicator_series(
     df: pd.DataFrame, ema_period: int = 200, rsi_period: int = 14
 ) -> pd.DataFrame:
-    """Compute EMA-200, RSI-14 and MACD series for every kline.
+    """Compute the full technical series for every kline.
+
+    Series: close, EMA-200, RSI-14, MACD and the 365-session simple moving
+    average plus two valuation metrics derived from it: the Price/SMA-365 ratio
+    (``mvrv``, a homemade MVRV) and ``nupl = 1 - 1/mvrv``. The SMA needs the
+    full history, so the first 364 rows are NaN and are persisted as NULL;
+    readers must handle them.
 
     :param df: DataFrame with at least a 'close' column (from BTCFetcher)
     :param ema_period: EMA period used as trend benchmark
     :param rsi_period: RSI period
-    :return: DataFrame with date, ema_200, rsi_14, macd, macd_signal, macd_hist
+    :return: DataFrame with date, close, ema_200, rsi_14, macd, macd_signal,
+        macd_hist, sma_365, mvrv, nupl
     """
-    columns = ["date", "ema_200", "rsi_14", "macd", "macd_signal", "macd_hist"]
+    columns = [
+        "date",
+        "close",
+        "ema_200",
+        "rsi_14",
+        "macd",
+        "macd_signal",
+        "macd_hist",
+        "sma_365",
+        "mvrv",
+        "nupl",
+    ]
     if df is None or df.empty or "close" not in df.columns:
         logger.warning("No data available to compute indicator series")
         return pd.DataFrame(columns=columns)
@@ -133,6 +151,7 @@ def calculate_indicator_series(
     close = pd.to_numeric(df["close"], errors="coerce")
     out = pd.DataFrame({"date": df["date"]})
 
+    out["close"] = close
     out["ema_200"] = _ema(close, ema_period)
     out["rsi_14"] = _rsi_series(close, rsi_period)
 
@@ -140,6 +159,12 @@ def calculate_indicator_series(
     out["macd"] = macd
     out["macd_signal"] = _ema(macd, 9)
     out["macd_hist"] = out["macd"] - out["macd_signal"]
+
+    out["sma_365"] = close.rolling(window=365).mean()
+
+    mvrv = close / out["sma_365"]
+    out["mvrv"] = mvrv
+    out["nupl"] = 1 - 1 / mvrv
 
     logger.info(f"Computed {len(out)} rows of indicator series")
     return out[columns]

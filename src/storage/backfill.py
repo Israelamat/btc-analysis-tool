@@ -66,14 +66,17 @@ def backfill_stocks(db: DatabaseManager) -> None:
 
 
 def backfill_indicators(db: DatabaseManager) -> None:
-    """Compute EMA-200 / RSI-14 series from stored BTC klines."""
+    """Compute the close / EMA-200 / RSI / MACD / SMA-365 / MVRV / NUPL series."""
     klines = db.load_btc_klines()
     if klines.empty:
         logger.warning("btc_klines is empty; run btc backfill first")
         return
     indicators = calculate_indicator_series(klines)
     written = db.upsert_btc_indicators(indicators)
-    logger.info(f"Backfilled {written} indicator rows (EMA-200, RSI-14, MACD)")
+    logger.info(
+        f"Backfilled {written} indicator rows "
+        f"(EMA-200, RSI-14, MACD, SMA-365, MVRV, NUPL)"
+    )
 
 
 def _asof(frame: pd.DataFrame, column: str, dates: pd.DatetimeIndex) -> pd.Series:

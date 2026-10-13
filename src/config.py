@@ -22,3 +22,9 @@ class Config:
     # be trusted. Below it the zone is capped (High -> Moderate, Selling ->
     # Neutral) so a couple of weak signals cannot label a strong buy or sell.
     COVERAGE_MIN: float = float(os.getenv("COVERAGE_MIN", "0.5"))
+
+    # Display-only normalization of the Price/SMA-365 valuation ratio: the
+    # ratio that maps to the neutral 50, and the span (ratio units) from the
+    # center to saturation at 0/100. Not part of the accumulation score yet.
+    VALUATION_RATIO_CENTER: float = float(os.getenv("VALUATION_RATIO_CENTER", "1.0"))
+    VALUATION_RATIO_SPAN: float = float(os.getenv("VALUATION_RATIO_SPAN", "0.3"))

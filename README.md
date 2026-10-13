@@ -221,6 +221,7 @@ python -m src.api          # http://127.0.0.1:8000  (docs at /docs)
 |--------|-------|---------|
 | `GET` | `/api/dashboard?days=90` | The nine blocks described below, in one call |
 | `POST` | `/api/refresh` | Runs the pipeline live, stores it, returns the report |
+| `GET` | `/api/valuation?days=365` | Price / SMA-365 ratio (homemade MVRV) and its 0-100 score |
 | `GET` | `/api/config` | Weights, zone thresholds, buy actions, component metadata |
 | `GET` | `/api/score/history` | Stored daily scores (`metrics_history`) |
 | `GET` | `/api/klines` | BTC/USDT daily candles (`btc_klines`) |
@@ -230,6 +231,15 @@ python -m src.api          # http://127.0.0.1:8000  (docs at /docs)
 | `GET` | `/api/stocks` | Equity and dollar data (`stock_history`) |
 | `GET` | `/api/google-trends` | Search interest (`google_trends`) |
 | `GET` | `/` | Route index, grouped by tag |
+
+`btc_indicators` now also stores the daily `close`, the **SMA-365**
+(365-session simple moving average, recomputed on every pipeline run) and two
+valuation metrics derived from it: **`mvrv`** (Price/SMA-365, a homemade MVRV)
+and **`nupl = 1 − 1/mvrv`** (a homemade Net Unrealized Profit/Loss). The first
+364 sessions have no complete SMA, so those rows are stored as `NULL` (never
+faked with a zero). `GET /api/valuation` divides the close by that SMA and maps
+it to a display score 0-100 (higher = cheaper) — purely informational, neither
+`mvrv` nor `nupl` feeds the accumulation score yet.
 
 `GET /api/dashboard` bundles nine blocks: `report` (today's score), `zone` (streak,
 thresholds, price context, distribution, transitions), `macro` (latest value of every
@@ -330,6 +340,22 @@ The page (Chart.js, loaded from a CDN — needs internet when opened) shows:
 `--out PATH` changes the destination, and `--horizon DAYS` (default 90) picks
 the horizon used by the summary cards. Output goes to `reports/` (gitignored).
 
+### 📈 On-chain valuation chart (MVRV & NUPL)
+
+`btc_indicators` stores a homemade **MVRV** (`Price/SMA-365`) and **NUPL**
+(`1 − 1/MVRV`). To eyeball them against the price:
+
+```bash
+python -m src.analytics.onchain_valuation_chart --open   # writes reports/onchain_valuation.html
+```
+
+The page (Chart.js via CDN) shows two panels: **BTC price with the SMA-365
+overlaid**, and **MVRV + NUPL** with reference lines at `MVRV = 1` / `NUPL = 0`.
+The three crossovers (price vs SMA-365, MVRV vs 1, NUPL vs 0) should coincide —
+and the SMA-365 can be compared against a daily SMA(365) on TradingView.
+`--start`/`--end` focus a window and `--out PATH` changes the destination. The
+first 364 sessions have no complete SMA, so they render as gaps.
+
 ### Historical depth
 
 | Source | Goes back to |
@@ -426,7 +452,8 @@ btc-analysis-tool/
     │   ├── scoring.py          # Composite market scoring engine
     │   ├── backtest.py         # Forward-return validation by score zone
     │   ├── calibrate.py        # Per-signal predictive-power diagnostics
-    │   └── chart.py            # Interactive buy-point chart (HTML + Chart.js)
+    │   ├── chart.py            # Interactive buy-point chart (HTML + Chart.js)
+    │   └── onchain_valuation_chart.py  # SMA-365 / MVRV / NUPL chart (HTML + Chart.js)
     ├── diagnostics/
     │   └── data_coverage.py    # Per-table date range and row counts
     ├── fetchers/
