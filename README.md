@@ -184,6 +184,33 @@ python -m src.fetchers stock_indices
 
 > ⚙️ Edit `TARGET = "all"` in `src/fetchers/__init__.py` to choose the default fetcher tested.
 
+### Run the tests
+
+The `tests/` suite uses **pytest** and runs fully offline: it never calls a data
+provider and never touches `data/macro_crypto.db` (the storage tests use a
+temporary SQLite file). It covers the scoring engine, indicator math, backtest
+statistics and database upserts.
+
+```bash
+# From the project root, with the venv active
+python -m pytest -q                    # whole suite
+python -m pytest -q tests/test_scoring.py   # one file
+python -m pytest -vv                   # per-test detail
+```
+
+What is guarded:
+
+- **Scoring** (`tests/test_scoring.py`): weights are normalized, a missing
+  signal renormalizes the score and reports `coverage`, low coverage caps a
+  strong call, and MACD does not saturate on normal readings.
+- **Indicators** (`tests/test_indicators.py`): RSI/SMA-365/MVRV/NUPL warmups, a
+  flat series yields RSI = 50, and empty or too-short input falls back safely.
+- **Backtest** (`tests/test_backtest.py`): forward returns require a complete
+  horizon, never forward-fill past the last candle, drawdowns need a full
+  window, and the episode win probability points the right way.
+- **Storage** (`tests/test_db_manager.py`): metric upserts keep one row per
+  date and the history loads in date order.
+
 ### Historical data & backfill
 
 ```bash
@@ -393,6 +420,7 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
 - [x] **Backtest validation of the score vs forward returns (8+ years)**
 - [x] **Data-driven weight & zone calibration**
 - [x] **Interactive buy-point chart** (`python -m src.analytics.chart`)
+- [x] **Unit test suite (pytest) for scoring, indicators, backtest & storage**
 - [x] SQLite persistence with daily history
 - [x] Standalone fetcher testing via CLI
 - [x] **Read-only REST API over the stored data** (`GET /api/dashboard`, `POST /api/refresh`)
@@ -445,6 +473,7 @@ btc-analysis-tool/
 ├── .env                        # Configuration (FRED_API_KEY, DB_PATH) — gitignored
 ├── data/                       # SQLite database (gitignored)
 ├── logs/                       # Application logs (gitignored)
+├── tests/                      # pytest suite (scoring, indicators, backtest, storage)
 └── src/
     ├── config.py               # Env-driven configuration
     ├── api/                    # Read-only REST API (FastAPI)

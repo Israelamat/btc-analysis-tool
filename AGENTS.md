@@ -22,6 +22,7 @@ python -m venv venv                      # Windows PowerShell: venv\Scripts\Acti
 
 & .\venv\Scripts\python.exe main.py      # live pipeline: fetch -> score -> buy actions
 & .\venv\Scripts\python.exe -m src.storage.backfill <target>   # see targets below
+& .\venv\Scripts\python.exe -m pytest -q                         # unit tests
 & .\venv\Scripts\python.exe -m src.analytics.backtest [--csv path]  # validation
 & .\venv\Scripts\python.exe -m src.analytics.calibrate         # component diagnostics
 & .\venv\Scripts\python.exe -m src.analytics.chart --open      # interactive buy-point HTML
@@ -156,8 +157,9 @@ filled with a neutral; EMA-200/RSI still need ~200 candles to warm up.
   deleted; docs just mention creating `.env`.
 - The DB is populated via backfill; `main.py` works without it (fresh fetch) but
   prefers stored full-history indicator values for consistency.
-- **No tests yet** and no lint/typecheck script configured — run edits with a real
-  command (e.g. `python main.py` or a backfill) to verify.
+- `tests/` holds the pytest suite (scoring, indicators, backtest, DB upserts);
+  run `python -m pytest -q`. No lint/typecheck script is configured — run edits
+  with a real command (e.g. `python main.py` or a backfill) to verify.
 - Fetchers log via `setup_logger()`; fetching errors are WARNINGs when the signal
   can be treated as missing, ERRORs when the pipeline must abort (e.g. no BTC).
 

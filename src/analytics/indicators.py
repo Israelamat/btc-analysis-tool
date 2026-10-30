@@ -18,6 +18,8 @@ def _rsi(series: pd.Series, period: int = 14) -> float:
     last_avg_gain = float(avg_gain.iloc[-1])
     last_avg_loss = float(avg_loss.iloc[-1])
 
+    if last_avg_gain == 0 and last_avg_loss == 0:
+        return 50.0
     if last_avg_loss == 0:
         return 100.0
     if last_avg_gain == 0:
@@ -112,6 +114,7 @@ def _rsi_series(series: pd.Series, period: int = 14) -> pd.Series:
     rsi = 100 - (100 / (1 + avg_gain / avg_loss))
     rsi = rsi.where(avg_loss != 0, 100.0)
     rsi = rsi.mask((avg_gain == 0) & (avg_loss != 0), 0.0)
+    rsi = rsi.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
     return rsi
 
 

@@ -48,13 +48,18 @@ def _load_klines(db: DatabaseManager) -> pd.DataFrame:
 def forward_return(
     klines: pd.DataFrame, scored_dates: pd.DatetimeIndex, horizon: int
 ) -> pd.Series:
-    """Return in % for each scored date, `horizon` calendar days later."""
-    future_close = klines["close"].reindex(
-        scored_dates + pd.Timedelta(days=horizon), method="ffill"
-    )
+    """Return in % for each scored date, `horizon` calendar days later.
+
+    The forward price is never forward-filled past the last candle and the
+    full horizon must fit inside the data; otherwise the observation is NaN
+    instead of a fabricated flat return.
+    """
+    future_dates = scored_dates + pd.Timedelta(days=horizon)
+    future_close = klines["close"].reindex(future_dates, method="ffill")
     base_close = klines["close"].reindex(scored_dates, method="ffill")
     returns = (future_close.to_numpy() / base_close.to_numpy() - 1) * 100
-    return pd.Series(returns, index=scored_dates)
+    complete = future_dates <= klines.index.max()
+    return pd.Series(returns, index=scored_dates).where(complete)
 
 
 def forward_max_drawdown(
@@ -67,12 +72,14 @@ def forward_max_drawdown(
     """
     close = klines["close"].to_numpy(dtype=float)
     close_dates = klines.index
+    last_date = close_dates.max()
     out = np.full(len(scored_dates), np.nan)
     for i, date in enumerate(scored_dates):
+        target = date + pd.Timedelta(days=horizon)
+        if target > last_date:
+            continue
         start = close_dates.searchsorted(date, side="left")
-        end = close_dates.searchsorted(
-            date + pd.Timedelta(days=horizon), side="right"
-        )
+        end = close_dates.searchsorted(target, side="right")
         window = close[start:end]
         if len(window) == 0:
             continue
@@ -311,7 +318,7 @@ def episode_evidence_table(
                     "wins": f"{wins}/{n}",
                     "exact_p": f"{_binomial_cdf(wins, n):.3f}",
                     "P_mean_neg": f"{_probability_mean_negative(returns, n_resamples):.0%}",
-                    "P_win_neg": f"{_binomial_cdf(wins, n + 1):.0%}",
+                    "P_win_neg": f"{1 - _binomial_cdf(wins, n + 1):.0%}",
                 }
             )
     return _zone_order(pd.DataFrame(rows))
