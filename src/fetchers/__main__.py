@@ -1,4 +1,5 @@
 import sys
+from src.fetchers.binance_futures import BinanceFuturesFetcher
 from src.fetchers.btc_binance import BTCFetcher
 from src.fetchers.fear_greed import FearGreedFetcher
 from src.fetchers.fred_m2 import FREDFetcher
@@ -11,7 +12,7 @@ def run_fetcher_test(target: str = TARGET) -> None:
     """Test the fetchers selected by target.
 
     Target can be: "all" | "btc" | "fear_greed" | "fred_m2" |
-    "google_trends" | "stock_indices"
+    "google_trends" | "stock_indices" | "derivatives"
     """
     target = target.lower()
 
@@ -21,6 +22,18 @@ def run_fetcher_test(target: str = TARGET) -> None:
         if not btc_df.empty:
             last = btc_df.iloc[-1]
             print(f"    Last={last['date']} close=${last['close']:,.2f}")
+        print()
+
+    if target in ("all", "derivatives"):
+        fetcher = BinanceFuturesFetcher()
+        klines = fetcher.fetch_data(limit=5)
+        funding = fetcher.get_recent_funding(limit=6)
+        print(f"[+] Futures: {len(klines)} recent klines")
+        if klines:
+            print(f"    Last close=${float(klines[-1][4]):,.2f}")
+        print(f"[+] Funding: {len(funding)} daily rows")
+        if not funding.empty:
+            print(f"    Last={funding.iloc[-1].to_dict()}")
         print()
 
     if target in ("all", "fear_greed"):

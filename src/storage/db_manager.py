@@ -13,6 +13,8 @@ class DatabaseManager:
         "google_trends",
         "stock_history",
         "btc_indicators",
+        "futures_klines",
+        "funding_history",
     )
 
     def __init__(self, db_path: str = Config.DB_PATH):
@@ -96,6 +98,27 @@ class DatabaseManager:
                     sma_365 REAL,
                     mvrv REAL,
                     nupl REAL
+                );
+
+                CREATE TABLE IF NOT EXISTS futures_klines (
+                    date TEXT PRIMARY KEY,
+                    close REAL,
+                    volume REAL,
+                    quote_volume REAL,
+                    taker_buy_base REAL,
+                    taker_buy_quote REAL,
+                    trades INTEGER,
+                    volume_delta REAL,
+                    delta_ratio REAL
+                );
+
+                CREATE TABLE IF NOT EXISTS funding_history (
+                    symbol TEXT,
+                    date TEXT,
+                    funding_rate REAL,
+                    funding_sum REAL,
+                    funding_count INTEGER,
+                    PRIMARY KEY (symbol, date)
                 );
             """
             )
@@ -302,6 +325,84 @@ class DatabaseManager:
             conn.executemany(query, rows)
             conn.commit()
         return len(rows)
+
+    def upsert_futures_klines(self, df: pd.DataFrame) -> int:
+        """Upsert USD-M futures daily klines and taker-flow features."""
+        if df is None or df.empty:
+            return 0
+        columns = (
+            "date",
+            "close",
+            "volume",
+            "quote_volume",
+            "taker_buy_base",
+            "taker_buy_quote",
+            "trades",
+            "volume_delta",
+            "delta_ratio",
+        )
+        rows = self._df_to_rows(df, columns)
+        query = """
+            INSERT INTO futures_klines (date, close, volume, quote_volume, taker_buy_base, taker_buy_quote, trades, volume_delta, delta_ratio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                close=excluded.close, volume=excluded.volume,
+                quote_volume=excluded.quote_volume,
+                taker_buy_base=excluded.taker_buy_base,
+                taker_buy_quote=excluded.taker_buy_quote,
+                trades=excluded.trades, volume_delta=excluded.volume_delta,
+                delta_ratio=excluded.delta_ratio;
+        """
+        with self._get_connection() as conn:
+            conn.executemany(query, rows)
+            conn.commit()
+        return len(rows)
+
+    def upsert_funding(self, df: pd.DataFrame, symbol: str = "BTCUSDT") -> int:
+        """Upsert daily aggregated funding rates for a futures symbol."""
+        if df is None or df.empty:
+            return 0
+        columns = ("date", "funding_rate", "funding_sum", "funding_count")
+        rows = self._df_to_rows(df, columns)
+        values = [
+            (
+                symbol,
+                str(date),
+                None if rate is None else float(rate),
+                None if total is None else float(total),
+                None if count is None else int(count),
+            )
+            for date, rate, total, count in rows
+        ]
+        query = """
+            INSERT INTO funding_history (symbol, date, funding_rate, funding_sum, funding_count)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(symbol, date) DO UPDATE SET
+                funding_rate=excluded.funding_rate,
+                funding_sum=excluded.funding_sum,
+                funding_count=excluded.funding_count;
+        """
+        with self._get_connection() as conn:
+            conn.executemany(query, values)
+            conn.commit()
+        return len(values)
+
+    def load_futures_klines(self) -> pd.DataFrame:
+        """Load the full USD-M futures daily history ordered by date."""
+        with self._get_connection() as conn:
+            query = "SELECT * FROM futures_klines ORDER BY date"
+            return pd.read_sql_query(query, conn)
+
+    def load_funding(self, symbol: str = "BTCUSDT") -> pd.DataFrame:
+        """Load the daily funding-rate history for a symbol."""
+        with self._get_connection() as conn:
+            query = """
+                SELECT date, funding_rate, funding_sum, funding_count
+                FROM funding_history
+                WHERE symbol = ?
+                ORDER BY date
+            """
+            return pd.read_sql_query(query, conn, params=(symbol,))
 
     def load_btc_klines(self) -> pd.DataFrame:
         """Load all BTC daily klines ordered by date."""

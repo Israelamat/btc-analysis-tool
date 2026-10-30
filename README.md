@@ -92,6 +92,7 @@ Public market dashboards are black boxes. This one is **yours**:
 | Source | Data | Fetcher | Auth |
 |--------|------|---------|------|
 | **Binance** | BTC/USDT daily OHLCV (klines) | `BTCFetcher` | none |
+| **Binance USD-M futures** | Funding rates, basis inputs, taker flow / CVD proxy | `BinanceFuturesFetcher` | none |
 | **Alternative.me** | Fear & Greed Index | `FearGreedFetcher` | none |
 | **FRED (St. Louis Fed)** | M2 money supply (YoY growth) | `FREDFetcher` | [free API key](https://fred.stlouisfed.org/docs/api/api_key.html) |
 | **Yahoo Finance** | S&P 500, NASDAQ, DXY trend | `StockIndicesFetcher` | none |
@@ -180,6 +181,7 @@ python -m src.fetchers btc
 python -m src.fetchers fear_greed
 python -m src.fetchers fred_m2
 python -m src.fetchers stock_indices
+python -m src.fetchers derivatives
 ```
 
 > ⚙️ Edit `TARGET = "all"` in `src/fetchers/__init__.py` to choose the default fetcher tested.
@@ -209,7 +211,11 @@ What is guarded:
   horizon, never forward-fill past the last candle, drawdowns need a full
   window, and the episode win probability points the right way.
 - **Storage** (`tests/test_db_manager.py`): metric upserts keep one row per
-  date and the history loads in date order.
+  date, the history loads in date order, and futures/funding upserts are
+  idempotent.
+- **Tactical** (`tests/test_tactical.py`): futures taker-flow parsing, daily
+  funding aggregation, trailing percentile has no look-ahead, and the DCA
+  simulator computes average cost / drawdown correctly.
 
 ### Historical data & backfill
 
@@ -218,8 +224,9 @@ What is guarded:
 python -m src.storage.backfill all
 
 # Or a single target: btc | fear_greed | fred_m2 | google_trends |
-#                     stock_indices | indicators | scores
+#                     stock_indices | derivatives | indicators | scores
 python -m src.storage.backfill stock_indices
+python -m src.storage.backfill derivatives   # futures klines + funding history
 python -m src.storage.backfill scores
 ```
 
@@ -350,6 +357,36 @@ forward returns (per signal and per score bin) — the tool used to set the curr
 python -m src.analytics.calibrate
 ```
 
+### 90-day tactical experiment (evaluated, not integrated)
+
+A separate research track tested whether free Binance USD-M derivatives could
+build a 90-day score that modulates the monthly DCA between 0.5x and 1.5x,
+leaving the 12-month cycle score untouched. The data is fetched and stored; the
+overlay is **not wired into `pipeline.py`** because it did not pass validation:
+
+```bash
+python -m src.storage.backfill derivatives          # futures klines + funding
+python -m src.analytics.tactical_calibration        # per-feature IC / stability
+python -m src.analytics.tactical_backtest           # candidates + DCA comparison
+```
+
+Findings on 2019-09 → 2026-10 (84 monthly samples, in-sample):
+
+| Candidate | IC 90d | 2019-21 | 2022-24 | 2024+ | DCA cost vs flat |
+|-----------|------:|------:|------:|------:|------:|
+| derivatives contrarian (funding/basis/CVD) | −0.004 | 0.324 | −0.418 | 0.100 | −9.3% |
+| sentiment momentum (FG/RSI/Trends pct) | 0.260 | 0.489 | 0.301 | −0.075 | −1.7% |
+| combined | 0.195 | 0.597 | −0.223 | 0.065 | −5.8% |
+| Google Trends contrarian (100 − value) | 0.234 | 0.021 | 0.421 | 0.368 | +4.5% |
+| existing cycle score | −0.065 | 0.161 | −0.351 | −0.036 | +5.3% |
+
+Derivatives do not separate 90d returns (the sign flips across subperiods), so
+they are not used for allocation. The only stable 90d signal is Google Trends
+contrarian, already inside the cycle score at 12% weight. The cycle score has
+near-zero 90d IC but still lowers the DCA average cost, i.e. it works as a
+cycle/anchor filter, not as a 90d timer. These are overlapping, in-sample
+comparisons: a screen, not a validated edge.
+
 ### 🖼️ Interactive chart of the buy points
 
 To eyeball the model against what BTC actually did, render the full price
@@ -397,6 +434,7 @@ first 364 sessions have no complete SMA, so they render as gaps.
 | Source | Goes back to |
 |--------|--------------|
 | BTC/USDT (Binance) | 2017-08-17 (pair listing) |
+| BTCUSDT USD-M futures + funding (Binance) | 2019-09-08 (perpetual listing) |
 | Fear & Greed (Alternative.me) | 2018-02-01 (index launch) |
 | S&P 500 · NASDAQ · DXY (Yahoo) | 2016-09 (10y range) |
 | M2 (FRED) | 1959 |
@@ -435,9 +473,10 @@ From data acquisition pipeline → **your personalized multi-layer market dashbo
 ### 🧭 On the Horizon — Layered Data
 
 - **📊 Derivatives**
-  - [ ] Funding rates & perpetuals data
+  - [x] Funding rates & perpetuals data (fetched, stored, audited)
+  - [x] Futures basis & taker flow / CVD proxy (fetched, stored, audited)
   - [ ] Open interest & liquidation maps
-  - [ ] Futures basis & term structure
+  - [ ] Validated 90-day tactical overlay (evaluated; no stable edge found)
 - **⛓️ On-chain**
   - [ ] Exchange inflows / outflows
   - [ ] Whale & miner movements
@@ -490,13 +529,17 @@ btc-analysis-tool/
     │   ├── scoring.py          # Composite market scoring engine
     │   ├── backtest.py         # Forward-return validation by score zone
     │   ├── calibrate.py        # Per-signal predictive-power diagnostics
+    │   ├── tactical_features.py     # 90d no-lookahead derivatives/sentiment panel
+    │   ├── tactical_calibration.py  # Per-feature 90d IC and subperiod stability
+    │   ├── tactical_backtest.py     # 90d candidates + modulated DCA evaluation
     │   ├── chart.py            # Interactive buy-point chart (HTML + Chart.js)
     │   └── onchain_valuation_chart.py  # SMA-365 / MVRV / NUPL chart (HTML + Chart.js)
     ├── diagnostics/
     │   └── data_coverage.py    # Per-table date range and row counts
     ├── fetchers/
     │   ├── base.py             # HTTP helper (headers, timeout, errors)
-    │   ├── btc_binance.py      # Binance klines
+    │   ├── btc_binance.py      # Binance spot klines
+    │   ├── binance_futures.py  # Binance USD-M futures klines + funding history
     │   ├── fear_greed.py       # Fear & Greed Index
     │   ├── fred_m2.py          # FRED M2 money supply
     │   ├── google_trends.py    # Google Trends search interest

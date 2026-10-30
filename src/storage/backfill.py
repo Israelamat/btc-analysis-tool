@@ -3,6 +3,7 @@ import sys
 import pandas as pd
 from src.analytics.indicators import calculate_indicator_series
 from src.analytics.scoring import BTCAcumulationScorer
+from src.fetchers.binance_futures import BinanceFuturesFetcher
 from src.fetchers.btc_binance import BTCFetcher
 from src.fetchers.fear_greed import FearGreedFetcher
 from src.fetchers.fred_m2 import FREDFetcher
@@ -23,6 +24,24 @@ def backfill_btc(db: DatabaseManager) -> None:
         return
     written = db.upsert_btc_klines(df)
     logger.info(f"Backfilled {written} BTC daily candles")
+
+
+def backfill_derivatives(db: DatabaseManager) -> None:
+    """Fetch USD-M futures klines (taker flow) and funding history."""
+    fetcher = BinanceFuturesFetcher()
+    klines = fetcher.get_daily_klines()
+    if klines.empty:
+        logger.warning("No futures kline data to backfill")
+    else:
+        written = db.upsert_futures_klines(klines)
+        logger.info(f"Backfilled {written} futures daily klines")
+
+    funding = fetcher.get_funding_history()
+    if funding.empty:
+        logger.warning("No funding data to backfill")
+    else:
+        written = db.upsert_funding(funding)
+        logger.info(f"Backfilled {written} daily funding rows")
 
 
 def backfill_fear_greed(db: DatabaseManager) -> None:
@@ -207,7 +226,8 @@ def run_backfill(target: str = TARGET) -> None:
     """Run the backfill for the selected target.
 
     Target can be: "all" | "btc" | "fear_greed" | "fred_m2" |
-    "google_trends" | "stock_indices" | "indicators" | "scores"
+    "google_trends" | "stock_indices" | "derivatives" |
+    "indicators" | "scores"
     """
     db = DatabaseManager()
     target = target.lower()
@@ -226,6 +246,9 @@ def run_backfill(target: str = TARGET) -> None:
 
     if target in ("all", "stock_indices"):
         backfill_stocks(db)
+
+    if target in ("all", "derivatives"):
+        backfill_derivatives(db)
 
     if target in ("all", "indicators"):
         backfill_indicators(db)

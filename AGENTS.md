@@ -26,10 +26,12 @@ python -m venv venv                      # Windows PowerShell: venv\Scripts\Acti
 & .\venv\Scripts\python.exe -m src.analytics.backtest [--csv path]  # validation
 & .\venv\Scripts\python.exe -m src.analytics.calibrate         # component diagnostics
 & .\venv\Scripts\python.exe -m src.analytics.chart --open      # interactive buy-point HTML
+& .\venv\Scripts\python.exe -m src.analytics.tactical_calibration  # 90d feature audit
+& .\venv\Scripts\python.exe -m src.analytics.tactical_backtest     # 90d DCA evaluation
 & .\venv\Scripts\python.exe -m src.fetchers [target]           # dev fetcher smoke test
 ```
 
-Backfill targets: `all | btc | fear_greed | fred_m2 | google_trends | stock_indices | indicators | scores`
+Backfill targets: `all | btc | fear_greed | fred_m2 | google_trends | stock_indices | derivatives | indicators | scores`
 
 Note: `python -m main.py` does **not** work (`-m` needs a module name, not a file).
 Use `python main.py` (or `python -m main`).
@@ -41,6 +43,7 @@ main.py                       thin entry -> calls src.fetchers.pipeline.run_pipe
 src/fetchers/
   base.py                     HTTP helper (headers, timeouts, retries)
   btc_binance.py              Binance BTC/USDT daily klines (full history pagination)
+  binance_futures.py          USD-M futures daily klines (taker flow) + funding history
   fear_greed.py               Alternative.me Fear & Greed (limit=0 => whole history)
   fred_m2.py                  FRED M2 money supply (requires FRED_API_KEY, None on fail)
   google_trends.py            "bitcoin" search interest (pytrends)
@@ -51,6 +54,9 @@ src/analytics/
   scoring.py                  BTCAcumulationScorer: available signals -> renormalized score
   backtest.py                 forward 7/30/90d returns grouped by zone
   calibrate.py                per-component correlation vs 90d forward return
+  tactical_features.py        90d no-lookahead panel (funding/basis/CVD/sentiment)
+  tactical_calibration.py     per-feature IC, deciles and subperiod stability
+  tactical_backtest.py        90d score candidates + modulated DCA evaluation
   chart.py                    interactive buy-point HTML (Chart.js, no new deps)
 src/storage/
   backfill.py                 historical backfill CLI (scores regenerated here)
@@ -124,11 +130,52 @@ that produced the +0.23 calibration:
   proxy_nupl 0.15) at the expense of Google Trends (0.60 → 0.12). Calibration
   showed the cost (correalation +0.23 → 0.008) and the change was kept anyway.
 
+## 90-day tactical experiment (Oct 2026) — evaluated, NOT integrated
+
+A parallel research track asked whether free derivatives data could build a
+90-day `tactical_score` that modulates the monthly DCA (0.5x–1.5x) without
+touching the 12-month cycle score. The fetchers/storage/audit are implemented;
+the allocation overlay is **deliberately not wired into `pipeline.py`** because
+the evidence did not support it.
+
+- `src/fetchers/binance_futures.py` pulls USD-M daily klines (incl. taker buy
+  volume → CVD proxy) and 8h funding rates (aggregated daily), from 2019-09.
+- `backfill derivatives` stores `futures_klines` and `funding_history`.
+- `src/analytics/tactical_features.py` builds a no-lookahead panel: funding,
+  basis, taker delta/CVD, past returns, RSI, Fear & Greed, Google Trends,
+  MVRV/NUPL percentiles, plus forward 90d returns/drawdowns.
+- `tactical_calibration` reports monthly Spearman IC and subperiod stability;
+  `tactical_backtest` compares candidate scores and a 0.5x–1.5x modulated DCA
+  against flat DCA.
+
+Findings (2019-09 → 2026-10, 84 monthly samples, in-sample):
+
+| Candidate | IC 90d | IC 2019-21 | IC 2022-24 | IC 2024+ | DCA cost vs flat |
+|-----------|------:|------:|------:|------:|------:|
+| derivatives contrarian (funding/basis/CVD) | -0.004 | 0.324 | -0.418 | 0.100 | -9.3% (worse) |
+| sentiment momentum (FG/RSI/Trends pct) | 0.260 | 0.489 | 0.301 | -0.075 | -1.7% (worse) |
+| combined | 0.195 | 0.597 | -0.223 | 0.065 | -5.8% (worse) |
+| Google Trends contrarian (100 − value) | 0.234 | 0.021 | 0.421 | 0.368 | +4.5% (better) |
+| existing cycle score | -0.065 | 0.161 | -0.351 | -0.036 | +5.3% (better) |
+
+- **Derivatives do not separate 90d returns**: funding/basis sign flips across
+  subperiods and the CVD signal is unstable. Do not add them as an allocation
+  modifier on this sample.
+- The only stable 90d signal is Google Trends contrarian, which is already in
+  the cycle score (weight 0.12) and has monthly resolution beyond ~5y.
+- The cycle score has near-zero 90d IC but still lowers DCA average cost
+  (+5.3%) and slightly improves max drawdown, i.e. it works as a cycle/anchor
+  filter rather than a 90d timer.
+- Caveat: these DCA comparisons are in-sample and monthly observations overlap
+  by horizon; treat them as a screen, not a validated edge. No walk-forward
+  allocation was promoted.
+
 ## Data sources & historical depth
 
 | Source | Goes back to |
 |--------|--------------|
 | BTC/USDT (Binance) | 2017-08-17 (pair listing, full pagination) |
+| BTCUSDT USD-M futures + funding (Binance) | 2019-09-08 (perpetual listing) |
 | Fear & Greed (Alternative.me) | 2018-02-01 (limit=0 gives everything) |
 | S&P 500 / NASDAQ / DXY (Yahoo) | 2016-09 (range "10y") |
 | M2 (FRED) | 1959 (limit raised to 20000) |
@@ -136,7 +183,8 @@ that produced the +0.23 calibration:
 
 Storage: SQLite at `data/macro_crypto.db` (gitignored). Tables: `btc_klines`,
 `btc_indicators`, `metrics_history` (daily score + zone + components JSON +
-`coverage`), `fear_greed_history`, `fred_series`, `stock_history`, `google_trends`.
+`coverage`), `fear_greed_history`, `fred_series`, `stock_history`, `google_trends`,
+`futures_klines` (taker flow / CVD inputs), `funding_history` (daily aggregate).
 
 Backfill scores: missing sources (Fear & Greed before 2018-02, Google Trends
 before 2017-08, DXY before 2016-09) are passed as `None` and renormalized, not
@@ -146,6 +194,9 @@ filled with a neutral; EMA-200/RSI still need ~200 candles to warm up.
 
 - **Google Trends `"today 1-y"` timeframe returns HTTP 400** from Google. Always use
   explicit date ranges (`"{start} {end}"`) — that is the current implementation.
+- **Binance funding `startTime=0` returns the latest page**, not history. Pagination
+  starts at `FUNDING_START_MS` (2019-09-01) in `binance_futures.py`; without it the
+  backfill silently stores only ~5 months of funding.
 - If the fresh Google Trends fetch fails it returns **None**, and the pipeline
   falls back to a recently stored DB value (< 30 days old) if available;
   otherwise the signal is treated as missing (score renormalizes, coverage drops).
@@ -157,9 +208,10 @@ filled with a neutral; EMA-200/RSI still need ~200 candles to warm up.
   deleted; docs just mention creating `.env`.
 - The DB is populated via backfill; `main.py` works without it (fresh fetch) but
   prefers stored full-history indicator values for consistency.
-- `tests/` holds the pytest suite (scoring, indicators, backtest, DB upserts);
-  run `python -m pytest -q`. No lint/typecheck script is configured — run edits
-  with a real command (e.g. `python main.py` or a backfill) to verify.
+- `tests/` holds the pytest suite (scoring, indicators, backtest, DB upserts,
+  futures parsing, trailing percentile, DCA math); run `python -m pytest -q`.
+  No lint/typecheck script is configured — run edits with a real command
+  (e.g. `python main.py` or a backfill) to verify.
 - Fetchers log via `setup_logger()`; fetching errors are WARNINGs when the signal
   can be treated as missing, ERRORs when the pipeline must abort (e.g. no BTC).
 
@@ -172,11 +224,13 @@ filled with a neutral; EMA-200/RSI still need ~200 candles to warm up.
   pandas DataFrames for series/history.
 - The user communicates in Spanish; code/docs/commits stay in English as today.
 
-## Current state (Sep 2026)
+## Current state (Oct 2026)
 
 Fetchers, backfill, scoring, backtest and calibration are done and validated over
-8.5 years. The roadmap (in README) points to reliability hardening, a web dashboard
-(FastAPI + SPA), multi-asset watchlist, derivatives/on-chain/macro layers, alerts,
+8.5 years. Derivatives data (funding/basis/taker flow) is fetched, stored and
+audited, but the 90d tactical overlay is not integrated (see the experiment
+section). The roadmap (in README) points to reliability hardening, a web dashboard
+(FastAPI + SPA), multi-asset watchlist, on-chain/macro layers, alerts,
 and CSV/Excel export.
 
 `backtest.py` runs overlapping horizons (7/30/90/180/365d) plus, with `--independent`,
