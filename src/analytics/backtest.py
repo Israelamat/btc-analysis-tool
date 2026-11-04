@@ -1,7 +1,7 @@
 """Validate the accumulation score against forward BTC returns.
 
 For every day with a recorded score, computes the BTC return over the
-following 7/30/90/180/365 calendar days and groups it by score zone, so
+following 7/30/90/180/365/730 calendar days and groups it by score zone, so
 the contrarian "buy when cheap" hypothesis can be checked empirically. An
 optional non-overlapping bootstrap section validates how much of the edge
 survives on statistically independent samples.
@@ -19,8 +19,18 @@ from src.utils.logger import setup_logger
 logger = setup_logger()
 
 HORIZONS = (7, 30, 90, 180, 365)
-INDEPENDENT_HORIZONS = (30, 90, 180, 365)
+CYCLE_HORIZONS = (365, 730)
+RETURN_HORIZONS = tuple(sorted(set(HORIZONS) | set(CYCLE_HORIZONS)))
 DRAWDOWN_HORIZONS = (90, 180)
+CYCLE_DRAWDOWN_HORIZONS = (365, 730)
+ALL_DRAWDOWN_HORIZONS = tuple(
+    sorted(set(DRAWDOWN_HORIZONS) | set(CYCLE_DRAWDOWN_HORIZONS))
+)
+INDEPENDENT_HORIZONS = (30, 90, 180, 365, 730)
+CYCLE_SPLIT = "2022-01-01"
+DCA_CONTRIBUTION = 1000.0
+DCA_MULTIPLIER_MIN = 0.5
+DCA_MULTIPLIER_MAX = 1.5
 ZONE_BUCKETS = (
     (70.0, "High accumulation zone"),
     (50.0, "Moderate accumulation zone"),
@@ -161,11 +171,13 @@ def _binomial_cdf(k: int, n: int) -> float:
     return min(total, 1.0)
 
 
-def summarize(metrics: pd.DataFrame) -> pd.DataFrame:
+def summarize(
+    metrics: pd.DataFrame, horizons: tuple[int, ...] = HORIZONS
+) -> pd.DataFrame:
     rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         row = {"zone": zone, "n": int(len(group))}
-        for horizon in HORIZONS:
+        for horizon in horizons:
             values = group[f"ret_{horizon}d"].dropna()
             if values.empty:
                 continue
@@ -177,12 +189,14 @@ def summarize(metrics: pd.DataFrame) -> pd.DataFrame:
     return _zone_order(pd.DataFrame(rows))
 
 
-def summarize_drawdowns(metrics: pd.DataFrame) -> pd.DataFrame:
+def summarize_drawdowns(
+    metrics: pd.DataFrame, horizons: tuple[int, ...] = DRAWDOWN_HORIZONS
+) -> pd.DataFrame:
     """Per-zone worst in-window drawdown (negative %, lower is worse)."""
     rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         row = {"zone": zone, "n": int(len(group))}
-        for horizon in DRAWDOWN_HORIZONS:
+        for horizon in horizons:
             values = group[f"dd_{horizon}d"].dropna()
             if values.empty:
                 continue
@@ -201,10 +215,275 @@ def _zone_order(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.sort_values("zone", key=lambda s: s.map(order))
 
 
+def correlation_table(
+    metrics: pd.DataFrame, horizons: tuple[int, ...] = RETURN_HORIZONS
+) -> pd.DataFrame:
+    """Score correlation with forward returns for every horizon.
+
+    The same daily score is measured against 7/30/90/180/365/730d returns.
+    A cycle model should improve as the horizon lengthens; a short-term timer
+    should show the opposite.
+    """
+    rows = []
+    for horizon in horizons:
+        column = f"ret_{horizon}d"
+        if column not in metrics.columns:
+            continue
+        sample = metrics.dropna(subset=["total_score", column])
+        if len(sample) < 10:
+            continue
+        pearson = sample["total_score"].corr(sample[column])
+        spearman = sample["total_score"].rank().corr(sample[column].rank())
+        rows.append(
+            {
+                "horizon": f"{horizon}d",
+                "n": int(len(sample)),
+                "pearson": round(float(pearson), 3),
+                "spearman": round(float(spearman), 3),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def temporal_correlation_table(
+    metrics: pd.DataFrame,
+    split: str = CYCLE_SPLIT,
+    horizons: tuple[int, ...] = CYCLE_HORIZONS,
+) -> pd.DataFrame:
+    """Cycle-horizon correlation before and after a temporal split.
+
+    The weights were designed on the full sample, so this is a stability check,
+    not a clean out-of-sample test: it answers whether the cycle relationship
+    survives in the later part of the history.
+    """
+    dates = pd.to_datetime(metrics["date"])
+    split_date = pd.Timestamp(split)
+    rows = []
+    for period, mask in (
+        ("before_split", dates < split_date),
+        ("after_split", dates >= split_date),
+    ):
+        subset = metrics.loc[mask]
+        for horizon in horizons:
+            column = f"ret_{horizon}d"
+            if column not in subset.columns:
+                continue
+            sample = subset.dropna(subset=["total_score", column])
+            if len(sample) < 10:
+                continue
+            pearson = sample["total_score"].corr(sample[column])
+            spearman = sample["total_score"].rank().corr(sample[column].rank())
+            rows.append(
+                {
+                    "period": period,
+                    "horizon": f"{horizon}d",
+                    "n": int(len(sample)),
+                    "pearson": round(float(pearson), 3),
+                    "spearman": round(float(spearman), 3),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _dca_path(prices: np.ndarray, contributions: np.ndarray) -> dict:
+    """Simulate periodic buys and mark the portfolio to the last price."""
+    units = contributions / prices
+    cumulative_units = np.cumsum(units)
+    invested = np.cumsum(contributions)
+    value = cumulative_units * prices
+    drawdown = value / np.maximum.accumulate(value) - 1.0
+    total_units = float(cumulative_units[-1])
+    total_invested = float(invested[-1])
+    final_value = total_units * float(prices[-1])
+    return {
+        "months": int(len(prices)),
+        "invested": total_invested,
+        "units": total_units,
+        "avg_cost": total_invested / total_units,
+        "final_value": final_value,
+        "roi_pct": (final_value / total_invested - 1.0) * 100,
+        "max_dd_pct": float(drawdown.min() * 100),
+    }
+
+
+def monthly_dca_table(
+    metrics: pd.DataFrame,
+    contribution: float = DCA_CONTRIBUTION,
+    min_multiplier: float = DCA_MULTIPLIER_MIN,
+    max_multiplier: float = DCA_MULTIPLIER_MAX,
+) -> pd.DataFrame:
+    """Flat monthly DCA vs a score-scaled monthly DCA (0.5x-1.5x).
+
+    The multiplier uses the previous day's score, so the buy decision never
+    peeks at the same close it is executed on. An empty frame means there is
+    not enough history for a meaningful comparison.
+    """
+    required = {"date", "btc_price", "total_score"}
+    if metrics.empty or not required.issubset(metrics.columns):
+        return pd.DataFrame()
+
+    frame = metrics[["date", "btc_price", "total_score"]].copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame = frame.dropna(subset=["date", "btc_price"]).sort_values("date")
+    frame = frame[frame["btc_price"] > 0]
+    if frame.empty:
+        return pd.DataFrame()
+
+    frame["prior_score"] = frame["total_score"].shift(1)
+    monthly = (
+        frame.groupby(frame["date"].dt.to_period("M"), as_index=False)
+        .first()
+        .sort_values("date")
+    )
+    if len(monthly) < 2:
+        return pd.DataFrame()
+
+    score = monthly["prior_score"].fillna(50.0).clip(0, 100)
+    multiplier = min_multiplier + (
+        (max_multiplier - min_multiplier) * score / 100.0
+    )
+    prices = monthly["btc_price"].to_numpy(dtype=float)
+    flat = _dca_path(prices, np.full(len(prices), contribution))
+    scaled = _dca_path(
+        prices, contribution * multiplier.to_numpy(dtype=float)
+    )
+
+    return pd.DataFrame(
+        [
+            {
+                "months": flat["months"],
+                "avg_multiplier": round(float(multiplier.mean()), 2),
+                "flat_avg_cost": round(flat["avg_cost"], 0),
+                "scaled_avg_cost": round(scaled["avg_cost"], 0),
+                "cost_improvement_pct": (
+                    round((flat["avg_cost"] / scaled["avg_cost"] - 1) * 100, 2)
+                    if scaled["avg_cost"]
+                    else np.nan
+                ),
+                "flat_invested": round(flat["invested"], 0),
+                "scaled_invested": round(scaled["invested"], 0),
+                "flat_roi_pct": round(flat["roi_pct"], 1),
+                "scaled_roi_pct": round(scaled["roi_pct"], 1),
+                "flat_max_dd_pct": round(flat["max_dd_pct"], 1),
+                "scaled_max_dd_pct": round(scaled["max_dd_pct"], 1),
+            }
+        ]
+    )
+
+
+def cycle_playbook_table(
+    metrics: pd.DataFrame, klines: pd.DataFrame
+) -> pd.DataFrame:
+    """Buy each High episode and sell at the first later Selling episode.
+
+    Open buys (no later Selling episode) are marked to the latest close and
+    reported as unrealized. Returns are percentages from entry to exit, so the
+    win rate is the share of buys that ended in profit.
+    """
+    if metrics.empty or klines.empty:
+        return pd.DataFrame()
+    if not {"date", "zone"}.issubset(metrics.columns):
+        return pd.DataFrame()
+
+    frame = metrics[["date", "zone"]].copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame = frame.sort_values("date")
+    buys = _episode_first_dates(
+        frame[frame["zone"] == "High accumulation zone"]
+    )
+    sells = _episode_first_dates(frame[frame["zone"] == "Selling zone"])
+    if buys.empty:
+        return pd.DataFrame()
+
+    close = klines["close"].astype(float)
+    latest_close = float(close.iloc[-1])
+    latest_date = close.index.max()
+    rows = []
+    for buy in buys:
+        entry = close.reindex([buy], method="ffill").iloc[0]
+        if pd.isna(entry) or entry <= 0:
+            continue
+        position = sells.searchsorted(buy, side="right")
+        if position < len(sells):
+            exit_date = sells[position]
+            exit_price = close.reindex([exit_date], method="ffill").iloc[0]
+            state = "Realized"
+        else:
+            exit_date = latest_date
+            exit_price = latest_close
+            state = "Unrealized"
+        if pd.isna(exit_price):
+            continue
+        rows.append(
+            {
+                "state": state,
+                "return_pct": (float(exit_price) / float(entry) - 1) * 100,
+                "days": int((exit_date - buy).days),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    trades = pd.DataFrame(rows)
+    summary = []
+    for state in ("Realized", "Unrealized"):
+        subset = trades[trades["state"] == state]
+        if subset.empty:
+            continue
+        returns = subset["return_pct"]
+        summary.append(
+            {
+                "state": state,
+                "trades": int(len(subset)),
+                "win_rate_pct": round(float((returns > 0).mean() * 100), 1),
+                "mean_return_pct": round(float(returns.mean()), 1),
+                "median_return_pct": round(float(returns.median()), 1),
+                "best_pct": round(float(returns.max()), 1),
+                "worst_pct": round(float(returns.min()), 1),
+                "avg_days": round(float(subset["days"].mean()), 0),
+            }
+        )
+    return pd.DataFrame(summary)
+
+
+def _bar(value: float, width: int = 20) -> str:
+    """ASCII bar for a 0-100 percentage."""
+    filled = int(round(max(0.0, min(100.0, value)) / 100 * width))
+    return "#" * filled + "-" * (width - filled)
+
+
+def playbook_validation(
+    metrics: pd.DataFrame, klines: pd.DataFrame
+) -> None:
+    """Report realized and unrealized outcomes of the High->Selling cycle."""
+    print("\n=== Cycle playbook: buy High accumulation, sell Selling zone ===")
+    print(
+        "One buy per High-accumulation episode; the first later Selling "
+        "episode closes it. Open buys are marked to the latest close."
+    )
+    table = cycle_playbook_table(metrics, klines)
+    if table.empty:
+        print("Not enough cycle trades to summarize")
+        return
+
+    print(table.to_string(index=False))
+    print("\nwin_rate_pct = share of trades with a positive return")
+    for _, row in table.iterrows():
+        label = "Realized gains" if row["state"] == "Realized" else "Unrealized gains"
+        print(
+            f"- {label}: [{_bar(row['win_rate_pct'])}] "
+            f"{row['win_rate_pct']:.1f}% profitable, "
+            f"mean {row['mean_return_pct']:+.1f}%, "
+            f"median {row['median_return_pct']:+.1f}%"
+        )
+
+
 def independent_table(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
+    horizons: tuple[int, ...] = INDEPENDENT_HORIZONS,
 ) -> pd.DataFrame:
     """Per-zone stats on non-overlapping, bootstrapped samples.
 
@@ -217,7 +496,7 @@ def independent_table(
     rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         dates = pd.DatetimeIndex(group["date"])
-        for horizon in INDEPENDENT_HORIZONS:
+        for horizon in horizons:
             indep = sample_independent(dates, horizon)
             returns = forward_return(klines, indep, horizon).dropna()
             if returns.empty:
@@ -245,12 +524,15 @@ def independent_validation(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
+    horizons: tuple[int, ...] = INDEPENDENT_HORIZONS,
 ) -> None:
     """Report non-overlapping, bootstrapped stats for every zone."""
     print(f"\n=== Independent-sample validation (bootstrap 95% CI, {n_resamples} resamples) ===")
     print("Non-overlapping picks; wide CIs on thin zones are the honest picture.")
 
-    table = independent_table(metrics, klines, n_resamples=n_resamples)
+    table = independent_table(
+        metrics, klines, n_resamples=n_resamples, horizons=horizons
+    )
     if not table.empty:
         print(table.to_string(index=False))
 
@@ -259,12 +541,13 @@ def episode_stats_table(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
+    horizons: tuple[int, ...] = INDEPENDENT_HORIZONS,
 ) -> pd.DataFrame:
     """Per-zone stats using one observation per consecutive-day run."""
     stats_rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         dates = _episode_first_dates(group)
-        for horizon in INDEPENDENT_HORIZONS:
+        for horizon in horizons:
             returns = forward_return(klines, dates, horizon).dropna()
             if returns.empty:
                 continue
@@ -291,6 +574,7 @@ def episode_evidence_table(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
+    horizons: tuple[int, ...] = INDEPENDENT_HORIZONS,
 ) -> pd.DataFrame:
     """Per-zone significance of a negative edge, one observation per run.
 
@@ -304,7 +588,7 @@ def episode_evidence_table(
     rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         dates = _episode_first_dates(group)
-        for horizon in INDEPENDENT_HORIZONS:
+        for horizon in horizons:
             returns = forward_return(klines, dates, horizon).dropna()
             if returns.empty:
                 continue
@@ -328,12 +612,13 @@ def episode_drawdown_table(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
+    horizons: tuple[int, ...] = ALL_DRAWDOWN_HORIZONS,
 ) -> pd.DataFrame:
     """Per-zone forward max drawdown, one observation per run."""
     rows = []
     for zone, group in metrics.groupby("zone", sort=False):
         dates = _episode_first_dates(group)
-        for horizon in DRAWDOWN_HORIZONS:
+        for horizon in horizons:
             drawdowns = forward_max_drawdown(klines, dates, horizon).dropna()
             if drawdowns.empty:
                 continue
@@ -354,6 +639,7 @@ def episode_validation(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
     n_resamples: int = 2000,
+    horizons: tuple[int, ...] = INDEPENDENT_HORIZONS,
 ) -> None:
     """Validate each zone on one return per consecutive-day run.
 
@@ -366,12 +652,16 @@ def episode_validation(
     print("\n=== Episode-level validation (1 return per run) ===")
     print("Each consecutive-day run counts once, not each day.")
 
-    stats_df = episode_stats_table(metrics, klines, n_resamples=n_resamples)
+    stats_df = episode_stats_table(
+        metrics, klines, n_resamples=n_resamples, horizons=horizons
+    )
     if not stats_df.empty:
         print("\n--- Stats per episode ---")
         print(stats_df.to_string(index=False))
 
-    evidence_df = episode_evidence_table(metrics, klines, n_resamples=n_resamples)
+    evidence_df = episode_evidence_table(
+        metrics, klines, n_resamples=n_resamples, horizons=horizons
+    )
     if not evidence_df.empty:
         print("\n--- Evidence (small p_exact supports a negative edge) ---")
         print("exact_p: one-sided binomial test, H0 win rate >= 50%")
@@ -391,11 +681,73 @@ def episode_validation(
                 f"(H0 win>=50%), Bayesian P(win<50%)={best['P_win_neg']}"
             )
 
-    dd_df = episode_drawdown_table(metrics, klines, n_resamples=n_resamples)
+    dd_df = episode_drawdown_table(
+        metrics,
+        klines,
+        n_resamples=n_resamples,
+        horizons=tuple(h for h in ALL_DRAWDOWN_HORIZONS if h in horizons),
+    )
     if not dd_df.empty:
         print("\n--- Max drawdown per episode (worst peak-to-trough in-window) ---")
         print("mean_dd: average worst decline from a peak inside the window")
         print(dd_df.to_string(index=False))
+
+
+def cycle_validation(
+    metrics: pd.DataFrame, split: str = CYCLE_SPLIT
+) -> None:
+    """Report the long-cycle evidence separately from the 90d timing view.
+
+    The score was designed to time accumulation across a cycle, so 365/730d
+    outcomes matter more than 30/90d. This section also checks temporal
+    stability and a monthly DCA overlay that uses the previous day's score.
+    """
+    print("\n=== Cycle-level validation (365/730d) ===")
+    print(
+        "The score is a long-cycle accumulation anchor, not a 30/90d timer. "
+        "Correlation should improve as the horizon lengthens."
+    )
+
+    cycle_summary = summarize(metrics, CYCLE_HORIZONS)
+    if cycle_summary.empty:
+        print("No cycle-horizon data to summarize")
+    else:
+        print(cycle_summary.to_string(index=False))
+
+    print("\n--- Score correlation by forward horizon ---")
+    correlations = correlation_table(metrics, RETURN_HORIZONS)
+    if correlations.empty:
+        print("Not enough overlap to correlate the score")
+    else:
+        print(correlations.to_string(index=False))
+
+    print(f"\n--- Temporal stability (split {split}) ---")
+    stability = temporal_correlation_table(
+        metrics, split=split, horizons=CYCLE_HORIZONS
+    )
+    if stability.empty:
+        print("Not enough observations on one side of the split")
+    else:
+        print(stability.to_string(index=False))
+        print("before_split is the design period; after_split is the stability check.")
+
+    print("\n=== Forward max drawdown by zone (cycle windows) ===")
+    cycle_dd = summarize_drawdowns(metrics, CYCLE_DRAWDOWN_HORIZONS)
+    if cycle_dd.empty:
+        print("No cycle-window drawdowns available")
+    else:
+        print(cycle_dd.to_string(index=False))
+
+    print("\n=== Monthly DCA: flat vs score-scaled (0.5x-1.5x) ===")
+    dca = monthly_dca_table(metrics)
+    if dca.empty:
+        print("Not enough monthly history for a DCA comparison")
+    else:
+        print(dca.to_string(index=False))
+        print(
+            "cost_improvement_pct > 0 means the score-scaled DCA bought at a "
+            "lower average cost than flat DCA over the same months."
+        )
 
 
 def load_metrics_with_forwards(db: DatabaseManager) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -426,9 +778,9 @@ def load_metrics_with_forwards(db: DatabaseManager) -> tuple[pd.DataFrame, pd.Da
         return empty, empty
 
     dates = pd.DatetimeIndex(metrics["date"])
-    for horizon in HORIZONS:
+    for horizon in RETURN_HORIZONS:
         metrics[f"ret_{horizon}d"] = forward_return(klines, dates, horizon).to_numpy()
-    for horizon in DRAWDOWN_HORIZONS:
+    for horizon in ALL_DRAWDOWN_HORIZONS:
         metrics[f"dd_{horizon}d"] = forward_max_drawdown(klines, dates, horizon).to_numpy()
 
     return metrics, klines
@@ -438,66 +790,79 @@ def run_backtest(
     csv_path: str | None = None,
     independent: bool = False,
     resamples: int = 2000,
+    split: str = CYCLE_SPLIT,
+    long_term: bool = False,
 ) -> pd.DataFrame:
     db = DatabaseManager()
     metrics, klines = load_metrics_with_forwards(db)
     if metrics.empty or klines.empty:
         return pd.DataFrame()
 
-    summary = summarize(metrics)
-    dd_summary = summarize_drawdowns(metrics)
-
-    print("\n=== Forward returns by score zone ===")
-    if summary.empty:
-        print("No data to summarize")
+    if long_term:
+        result = summarize(metrics, CYCLE_HORIZONS)
     else:
-        print(summary.to_string(index=False))
-        print("\nInterpretation:")
-        for _, row in summary.iterrows():
-            print(
-                f"- {row['zone']} (n={int(row['n'])}): "
-                f"mean 90d={row.get('mean_90d')}% "
-                f"(win rate {row.get('win_rate_90d')}%)"
-            )
+        result = summarize(metrics)
+        dd_summary = summarize_drawdowns(metrics)
 
-    corr = metrics.dropna(subset=["total_score", "ret_90d"])
-    if len(corr) >= 10:
-        correlation = corr["total_score"].corr(corr["ret_90d"])
-        print(f"\nCorrelation score vs 90d forward return: {correlation:.3f}")
+        print("\n=== Forward returns by score zone ===")
+        if result.empty:
+            print("No data to summarize")
+        else:
+            print(result.to_string(index=False))
+            print("\nInterpretation:")
+            for _, row in result.iterrows():
+                print(
+                    f"- {row['zone']} (n={int(row['n'])}): "
+                    f"mean 90d={row.get('mean_90d')}% "
+                    f"(win rate {row.get('win_rate_90d')}%)"
+                )
 
-    print("\n=== Forward max drawdown by zone (worst peak-to-trough in-window) ===")
-    if dd_summary.empty:
-        print("No data to summarize")
-    else:
-        print(dd_summary.to_string(index=False))
-        print("\nReturns measure the end-line; drawdown measures the journey:")
-        neg_zone = dd_summary[dd_summary["zone"] == "Selling zone"]
-        high_zone = dd_summary[dd_summary["zone"] == "High accumulation zone"]
-        for horizon in DRAWDOWN_HORIZONS:
-            if neg_zone.empty or high_zone.empty:
-                continue
-            col = f"mean_dd_{horizon}d"
-            n_mean = float(neg_zone[col].iloc[0])
-            h_mean = float(high_zone[col].iloc[0])
-            print(
-                f"- At {horizon}d the Selling zone bottoms out at a mean "
-                f"{n_mean:.1f}% below its peak vs {h_mean:.1f}% for High "
-                f"accumulation: the zone is about avoiding the crash, "
-                f"not about the 365d end-line."
-            )
+        corr = metrics.dropna(subset=["total_score", "ret_90d"])
+        if len(corr) >= 10:
+            correlation = corr["total_score"].corr(corr["ret_90d"])
+            print(f"\nCorrelation score vs 90d forward return: {correlation:.3f}")
+
+        print("\n=== Forward max drawdown by zone (worst peak-to-trough in-window) ===")
+        if dd_summary.empty:
+            print("No data to summarize")
+        else:
+            print(dd_summary.to_string(index=False))
+            print("\nReturns measure the end-line; drawdown measures the journey:")
+            neg_zone = dd_summary[dd_summary["zone"] == "Selling zone"]
+            high_zone = dd_summary[dd_summary["zone"] == "High accumulation zone"]
+            for horizon in DRAWDOWN_HORIZONS:
+                if neg_zone.empty or high_zone.empty:
+                    continue
+                col = f"mean_dd_{horizon}d"
+                n_mean = float(neg_zone[col].iloc[0])
+                h_mean = float(high_zone[col].iloc[0])
+                print(
+                    f"- At {horizon}d the Selling zone averages {n_mean:.1f}% vs "
+                    f"{h_mean:.1f}% for High accumulation (more negative = deeper "
+                    f"decline)."
+                )
+
+    cycle_validation(metrics, split=split)
 
     if independent:
-        independent_validation(metrics, klines, n_resamples=resamples)
-        episode_validation(metrics, klines, n_resamples=resamples)
+        horizons = CYCLE_HORIZONS if long_term else INDEPENDENT_HORIZONS
+        independent_validation(
+            metrics, klines, n_resamples=resamples, horizons=horizons
+        )
+        episode_validation(
+            metrics, klines, n_resamples=resamples, horizons=horizons
+        )
+
+    playbook_validation(metrics, klines)
 
     if csv_path:
         metrics.to_csv(csv_path, index=False)
         logger.info(f"Backtest details saved to {csv_path}")
 
-    return summary
+    return result
 
 
-if __name__ == "__main__":
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate the accumulation score with forward returns"
     )
@@ -515,5 +880,30 @@ if __name__ == "__main__":
         default=2000,
         help="Bootstrap resamples for the independent validation (default 2000)",
     )
-    args = parser.parse_args()
-    run_backtest(csv_path=args.csv, independent=args.independent, resamples=args.resamples)
+    parser.add_argument(
+        "--split",
+        default=CYCLE_SPLIT,
+        help="Temporal stability split date (default 2022-01-01)",
+    )
+    parser.add_argument(
+        "--long-term",
+        dest="long_term",
+        action="store_true",
+        help="Only run the 365/730d cycle validation",
+    )
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    run_backtest(
+        csv_path=args.csv,
+        independent=args.independent,
+        resamples=args.resamples,
+        split=args.split,
+        long_term=args.long_term,
+    )
+
+
+if __name__ == "__main__":
+    main()

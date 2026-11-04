@@ -12,9 +12,9 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger()
 
-HIGH_ZONE = 80.0
+HIGH_ZONE = 70.0
 SELLING_ZONE = 30.0
-TABLE_HORIZONS = (7, 30, 90, 180)
+TABLE_HORIZONS = (7, 30, 90, 180, 365, 730)
 DEFAULT_OUT = os.path.join("reports", "buy_points.html")
 DEFAULT_HORIZON = 90
 
@@ -64,7 +64,7 @@ TEMPLATE = """<!doctype html>
 <body>
 <h1>__TITLE__</h1>
 <p class="meta">Generated __GENERATED__ &middot; horizon __HORIZON__d &middot;
-   green = High accumulation (score &ge; 80) &middot; red = Selling zone (score &lt; 30)</p>
+   green = High accumulation (score &ge; 70) &middot; red = Selling zone (score &lt; 30)</p>
 
 <div class="cards">__CARDS__</div>
 
@@ -75,7 +75,7 @@ TEMPLATE = """<!doctype html>
 <table>
 <thead><tr>
   <th>Entry</th><th>End</th><th>Days</th><th>Score max</th><th>Price in</th>
-  <th>Price min</th><th>7d</th><th>30d</th><th>90d</th><th>180d</th>
+  <th>Price min</th><th>7d</th><th>30d</th><th>90d</th><th>180d</th><th>365d</th><th>730d</th>
 </tr></thead>
 <tbody>__ROWS__</tbody>
 </table>

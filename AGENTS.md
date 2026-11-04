@@ -23,7 +23,7 @@ python -m venv venv                      # Windows PowerShell: venv\Scripts\Acti
 & .\venv\Scripts\python.exe main.py      # live pipeline: fetch -> score -> buy actions
 & .\venv\Scripts\python.exe -m src.storage.backfill <target>   # see targets below
 & .\venv\Scripts\python.exe -m pytest -q                         # unit tests
-& .\venv\Scripts\python.exe -m src.analytics.backtest [--csv path]  # validation
+& .\venv\Scripts\python.exe -m src.analytics.backtest [--long-term] [--independent] [--csv path]
 & .\venv\Scripts\python.exe -m src.analytics.calibrate         # component diagnostics
 & .\venv\Scripts\python.exe -m src.analytics.chart --open      # interactive buy-point HTML
 & .\venv\Scripts\python.exe -m src.analytics.tactical_calibration  # 90d feature audit
@@ -52,7 +52,7 @@ src/fetchers/
 src/analytics/
   indicators.py               EMA-200, RSI-14, MACD (single-day + full series)
   scoring.py                  BTCAcumulationScorer: available signals -> renormalized score
-  backtest.py                 forward 7/30/90d returns grouped by zone
+  backtest.py                 7/30/90/180/365/730d returns by zone + cycle/DCA checks
   calibrate.py                per-component correlation vs 90d forward return
   tactical_features.py        90d no-lookahead panel (funding/basis/CVD/sentiment)
   tactical_calibration.py     per-feature IC, deciles and subperiod stability
@@ -112,15 +112,24 @@ defined, so both components are missing and the score renormalizes.
 
 Zones (`_classify` in `scoring.py`, mirrored in `backtest.ZONE_BUCKETS`):
 
-| Zone | Score | Historical mean 90d return | Win rate |
+| Zone | Score | Mean 90d return | Win 90d |
 |------|------:|------:|------:|
-| High accumulation | ≥ 70 | +11.4% | 49.9% |
-| Moderate | 50–69 | +21.0% | 51.4% |
-| Neutral | 30–49 | +21.8% | 63.1% |
+| High accumulation | ≥ 70 | +11.0% | 48.9% |
+| Moderate | 50–69 | +21.2% | 50.1% |
+| Neutral | 30–49 | +22.5% | 63.1% |
 | Selling zone | < 30 | +10.2% | 51.5% |
 
+**Cycle-level validation (Oct 2026)**: the score is a 730d cycle anchor, not a
+30/90d timer. Correlation rises with horizon: 30d −0.033, 90d 0.005, 180d 0.047,
+365d 0.178, **730d 0.392**. Temporal stability split at 2022-01-01: 730d Spearman
++0.498 before / +0.331 after (stable); 365d +0.346 / −0.059 (not stable). Cycle
+returns by zone (365d / 730d mean, win): High +124.8%/87.5% and +378.4%/97.1%;
+Moderate +60.4%/55.8% and +187.1%/80.0%; Neutral +81.6%/59.6% and +157.6%/72.2%;
+Selling +36.4%/57.7% and +75.5%/57.6%. Monthly DCA scaled 0.5x–1.5x bought at a
+**9.0% lower average cost** than flat DCA (111 months, in-sample, overlapping).
+
 Correlation score vs 90d forward return: **≈ 0 (was ~+0.23 before re-weighting)**.
-The zones no longer separate forward returns on the sample; historical decisions
+The zones no longer separate 90d forward returns on the sample; historical decisions
 that produced the +0.23 calibration:
 
 - fear_greed/rsi/ema-contarian signals proved *negative/noise* predictors at 90d → previously down-weighted (they are up again since Oct 2026 by design).
@@ -233,12 +242,22 @@ section). The roadmap (in README) points to reliability hardening, a web dashboa
 (FastAPI + SPA), multi-asset watchlist, on-chain/macro layers, alerts,
 and CSV/Excel export.
 
-`backtest.py` runs overlapping horizons (7/30/90/180/365d) plus, with `--independent`,
-a non-overlapping bootstrap section and an episode-level validation (one return per
-consecutive-day run) with exact binomial p-values and a Bayesian posterior
-P(win < 50%). Newer: a forward **max drawdown** report (90/180d, daily and per
-episode) that shows the Selling zone bottoms out ~10 points deeper than High
-accumulation, which is the zone's real purpose (protecting capital). Note: 109
-"Selling zone" days are only ~23 episodes and ~5-7 market cycles, so its negative
-edge is best supported by the mean at 180d
-(P(mean<0) ≈ 82%), not by its win rate.
+`backtest.py` runs overlapping horizons (7/30/90/180/365/730d) plus, with
+`--independent`, a non-overlapping bootstrap section and an episode-level validation
+(one return per consecutive-day run) with exact binomial p-values and a Bayesian
+posterior P(win < 50%). It also reports forward **max drawdowns**
+(90/180/365/730d, daily and per episode), the score correlation by horizon, temporal
+stability split at 2022 (`--split`), and a monthly flat-vs-scaled DCA comparison.
+Use `--long-term` to skip the 30/90d tables and print only the 365/730d cycle view;
+`--long-term --independent` also restricts bootstrap/episodes to 365/730d. Every run
+ends with a **cycle playbook**: one buy per High episode, sold at the first later
+Selling episode; open buys are marked to the latest close. It shows realized and
+unrealized trades, win rate and mean/median returns.
+
+Key results: correlation grows with horizon (730d +0.39, stable; 365d +0.18,
+unstable after 2022). At 730d, High accumulation has a +378% mean and 97% win rate
+vs Selling +76% and 58%. Drawdowns are **not** the differentiator: 90d High ≈ −24.9%
+vs Selling ≈ −25.2%; 730d High ≈ −50.8% vs Selling ≈ −56.0%. Scaled DCA lowered
+average cost ~9% over 111 months, but the sample is in-sample, overlapping and only
+~2–4 independent cycles. Older claim that Selling bottoms ~10 points deeper was
+wrong and has been removed.

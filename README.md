@@ -130,10 +130,26 @@ A weighted composite of tradable signals, normalized to **0–100**, giving a re
 
 | Zone | Score | Mean 90d return (2017→2026) | Win rate | Mean 90d max drawdown |
 |------|-------:|------------------------------:|---------:|----------------------:|
-| **High accumulation** | ≥ 70 | +11.4% | 49.9% | −24.5% |
-| **Moderate accumulation** | 50–69 | +21.0% | 51.4% | −29.4% |
-| **Neutral** | 30–49 | +21.8% | 63.1% | −24.2% |
+| **High accumulation** | ≥ 70 | +11.0% | 48.9% | −24.9% |
+| **Moderate accumulation** | 50–69 | +21.2% | 50.1% | −30.0% |
+| **Neutral** | 30–49 | +22.5% | 63.1% | −25.0% |
 | **Selling zone** | < 30 | +10.2% | 51.5% | −25.2% |
+
+The short-horizon table is **not** the model's edge: at 90d the zones are close.
+The score behaves as a multi-year cycle anchor, and the separation appears when
+the horizon lengthens:
+
+| Zone | Score | Mean 365d return | Win 365d | Mean 730d return | Win 730d |
+|------|-------:|-----------------:|---------:|-----------------:|---------:|
+| **High accumulation** | ≥ 70 | +124.8% | 87.5% | +378.4% | 97.1% |
+| **Moderate accumulation** | 50–69 | +60.4% | 55.8% | +187.1% | 80.0% |
+| **Neutral** | 30–49 | +81.6% | 59.6% | +157.6% | 72.2% |
+| **Selling zone** | < 30 | +36.4% | 57.7% | +75.5% | 57.6% |
+
+Score correlation with forward returns rises from **−0.03 at 30d** to **+0.005 at
+90d**, **+0.18 at 365d** and **+0.39 at 730d**. The 730d relationship is stable
+across the pre/post-2022 split (Spearman **+0.50 → +0.33**); the 365d one is not
+(+0.35 → −0.06). Treat the score as a cycle anchor, not a 1-year timer.
 
 ---
 
@@ -209,7 +225,8 @@ What is guarded:
   flat series yields RSI = 50, and empty or too-short input falls back safely.
 - **Backtest** (`tests/test_backtest.py`): forward returns require a complete
   horizon, never forward-fill past the last candle, drawdowns need a full
-  window, and the episode win probability points the right way.
+  window, the episode win probability points the right way, and the cycle
+  playbook pairs High buys with the next Selling episode.
 - **Storage** (`tests/test_db_manager.py`): metric upserts keep one row per
   date, the history loads in date order, and futures/funding upserts are
   idempotent.
@@ -285,7 +302,8 @@ it to a display score 0-100 (higher = cheaper) — purely informational, neither
 
 `GET /api/dashboard` bundles nine blocks: `report` (today's score), `zone` (streak,
 thresholds, price context, distribution, transitions), `macro` (latest value of every
-source), `config`, `backtest` (forward return per zone and horizon), `calibration`,
+source), `config`, `backtest` (forward return per zone and horizon + correlations),
+`calibration`,
 `health`, `history` (short score/price series) and `generated_at`.
 
 ```jsonc
@@ -333,24 +351,60 @@ as JSON instead of a stack trace. The full contract lives in `/docs` and
 ## 📊 Backtesting & Calibration
 
 The score is validated against history, not vibes. For every day with a stored score
-it computes the BTC return **7 / 30 / 90 / 180 / 365 days later** and groups it by zone,
-so the "buy cheap" hypothesis can be checked empirically. It also reports the **forward
-max drawdown** per zone (worst peak-to-trough within 90/180d windows): the Selling zone
-bottoms out ~10 points deeper than High accumulation, which is what that zone is really
-for — protecting capital.
+it computes the BTC return **7 / 30 / 90 / 180 / 365 / 730 days later** and groups it
+by zone, so the "buy cheap" hypothesis can be checked empirically. The cycle report
+also adds the correlation by horizon, a temporal stability check split at 2022, forward
+max drawdowns for 90/180/365/730d windows, and a monthly DCA comparison (flat vs
+score-scaled 0.5x–1.5x).
+
+Two honest caveats: (1) at 90d the zones barely separate, and forward drawdowns are
+similar (90d High ≈ −24.9% vs Selling ≈ −25.2%; 730d High ≈ −50.8% vs Selling ≈
+−56.0%) — the score is not short-term downside protection. (2) The clean signal is at
+**730d**, where High accumulation averages **+378%** with a **97%** win rate and
+correlation is **+0.39** (Spearman +0.33 after 2022). The scaled DCA bought at a
+**~9% lower average cost** than flat DCA over 111 months, but this is in-sample with
+overlapping horizons and only ~2–4 independent cycles.
+
+The final block is a **cycle playbook**: one buy per High-accumulation episode, sold
+at the first later Selling-zone episode (open buys are marked to the latest close).
+It reports **realized** and **unrealized** trades with win rate, mean/median return,
+best/worst trade and average holding days. This block appears with and without
+`--independent`, so the visual summary is always available.
 
 ```bash
 # Run the backtest (uses stored metrics_history + btc_klines)
 python -m src.analytics.backtest
 
+# Only the 365/730d cycle view (correlations, stability, drawdowns, DCA)
+python -m src.analytics.backtest --long-term
+
 # Also run the --independent bootstrap + episode-level validation
 python -m src.analytics.backtest --independent
+
+# Cycle view + independent validation restricted to 365/730d
+python -m src.analytics.backtest --long-term --independent
 
 # Save the per-day details to CSV
 python -m src.analytics.backtest --csv backtest.csv
 ```
 
-`src/analytics/calibrate.py` measures how much each component actually predicts
+#### Cycle playbook output
+
+Every run (with or without `--independent`) ends with the realized/unrealized view:
+
+```text
+=== Cycle playbook: buy High accumulation, sell Selling zone ===
+     state  trades  win_rate_pct  mean_return_pct  median_return_pct  best_pct  worst_pct  avg_days
+  Realized      48          75.0             24.9               24.7     137.3      -34.6     250.0
+Unrealized      10          50.0              2.2                4.0      25.6      -16.5     234.0
+
+- Realized gains: [###############-----] 75.0% profitable, mean +24.9%, median +24.7%
+- Unrealized gains: [##########----------] 50.0% profitable, mean +2.2%, median +4.0%
+```
+
+`Realized` = a High-accumulation buy closed at the first later Selling-zone episode.
+`Unrealized` = a buy still open, marked to the latest close. `win_rate_pct` is the
+share of trades with a positive return.
 forward returns (per signal and per score bin) — the tool used to set the current weights:
 
 ```bash
@@ -403,11 +457,11 @@ The page (Chart.js, loaded from a CDN — needs internet when opened) shows:
 
 - **BTC price** on a logarithmic axis with the accumulation **score overlaid**
   on a secondary 0–100 axis.
-- **Green** points/bands on every High-accumulation day (score ≥ 80) and **red**
+- **Green** points/bands on every High-accumulation day (score ≥ 70) and **red**
   on the Selling zone (score < 30).
 - **Summary cards** comparing High entries against the all-days baseline.
 - A **table** of every High episode (entry/exit, days, max score, price and the
-  forward 7/30/90/180d return, green when positive, red when negative) — losses
+  forward 7/30/90/180/365/730d return, green when positive, red when negative) — losses
   included, so the model is shown as-is, not cherry-picked.
 
 `--out PATH` changes the destination, and `--horizon DAYS` (default 90) picks

@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 import pandas as pd
 from src.analytics.backtest import (
+    RETURN_HORIZONS,
     ZONE_BUCKETS,
+    correlation_table,
     load_metrics_with_forwards,
     summarize,
 )
@@ -796,9 +798,10 @@ def backtest_zones() -> dict:
         correlation = None if value != value else round(float(value), 4)
 
     return {
-        "zones": _by_horizon(records(summarize(metrics))),
+        "zones": _by_horizon(records(summarize(metrics, RETURN_HORIZONS))),
         "correlation": correlation,
         "correlation_horizon_days": CORRELATION_HORIZON,
+        "correlations": records(correlation_table(metrics, RETURN_HORIZONS)),
         "sample": {
             "start": date_str(metrics["date"].min()),
             "end": date_str(metrics["date"].max()),
