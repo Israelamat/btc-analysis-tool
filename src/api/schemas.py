@@ -64,10 +64,29 @@ class BtcReport(BaseModel):
 
 
 class ScoreSnapshot(BtcReport):
-    """`BtcReport` plus the buy action and where the numbers came from."""
+    """`BtcReport` plus the buy/sell allocation signal and its source."""
 
     action: str = Field(description="Recommended action for the current zone")
-    ratio: float = Field(ge=0, le=1, description="Share of the monthly budget to deploy")
+    ratio: float = Field(
+        ge=0,
+        le=1,
+        description="Target share of capital in BTC (0 at score 30, 1 at 70)",
+    )
+    target_allocation_pct: float | None = Field(
+        default=None, description="Target share of capital in BTC, in %"
+    )
+    previous_score: float | None = Field(
+        default=None, description="Previous stored score used as the baseline"
+    )
+    buy_pct: float | None = Field(
+        default=None, description="Share of total capital to buy right now, in %"
+    )
+    sell_pct: float | None = Field(
+        default=None, description="Share of total capital to sell right now, in %"
+    )
+    signal: str | None = Field(
+        default=None, description="BUY | SELL | HOLD from the allocation change"
+    )
     source: str = Field(description="'stored' (last pipeline run) or 'live' (just fetched)")
     latest_candle_date: str | None = None
     fallbacks: dict[str, Any] | None = None
@@ -176,7 +195,16 @@ class CurrentZone(BaseModel):
     zone: str
     score: int | None = None
     action: str
-    ratio: float = Field(ge=0, le=1, description="Share of the monthly budget to deploy")
+    ratio: float = Field(
+        ge=0,
+        le=1,
+        description="Target share of capital in BTC (0 at score 30, 1 at 70)",
+    )
+    target_allocation_pct: float | None = None
+    previous_score: float | None = None
+    buy_pct: float | None = None
+    sell_pct: float | None = None
+    signal: str | None = Field(default=None, description="BUY | SELL | HOLD")
     streak_days: int = Field(description="Consecutive stored days in this zone")
     streak_start: str | None = None
     zone_history: ZoneHistory | None = Field(
@@ -214,6 +242,9 @@ class ModelConfigResponse(BaseModel):
     weights: dict[str, float]
     zones: list[dict[str, Any]]
     actions: dict[str, dict[str, Any]]
+    allocation: dict[str, Any] | None = Field(
+        default=None, description="Score-to-allocation anchors used for signals"
+    )
     components: list[ComponentMeta]
 
 

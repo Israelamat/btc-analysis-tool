@@ -20,6 +20,70 @@ def _present(value) -> bool:
         return False
 
 
+def allocation_pct(score: float | None) -> float | None:
+    """Target share of capital (0-100) to hold in BTC for a given score.
+
+    Anchored to the zone thresholds: at or below ``Config.ALLOCATION_FLOOR``
+    the target is 0%, at or above ``Config.ALLOCATION_CEILING`` it is 100%, and
+    linear in between (a score of 50 maps to 50%). This is the percentage the
+    monthly action and the backtests use instead of trading the whole position.
+    """
+    if not _present(score):
+        return None
+    floor = Config.ALLOCATION_FLOOR
+    ceiling = Config.ALLOCATION_CEILING
+    if ceiling <= floor:
+        return 100.0 if float(score) >= ceiling else 0.0
+    raw = (float(score) - floor) / (ceiling - floor) * 100.0
+    return round(_clip(raw), 1)
+
+
+def allocation_ratio(score: float | None) -> float | None:
+    """Target allocation as a 0-1 fraction of capital (``None`` if no score)."""
+    pct = allocation_pct(score)
+    return None if pct is None else round(pct / 100, 4)
+
+
+def allocation_signal(
+    score: float | None, previous_score: float | None = None
+) -> dict:
+    """Rebalancing signal derived from the target allocation at each point.
+
+    The target share is compared with the previous point's target; the
+    difference is what has to be bought (target rose) or sold (target fell).
+    With no previous point the position is assumed to start in cash, so the
+    whole target is bought. Percentages are shares of total capital.
+    """
+    target = allocation_pct(score)
+    previous_target = allocation_pct(previous_score)
+    if target is None:
+        return {
+            "target_pct": None,
+            "previous_target_pct": previous_target,
+            "buy_pct": None,
+            "sell_pct": None,
+            "action": "HOLD",
+        }
+
+    baseline = 0.0 if previous_target is None else previous_target
+    delta = target - baseline
+    buy_pct = round(max(delta, 0.0), 1)
+    sell_pct = round(max(-delta, 0.0), 1)
+    if buy_pct > 0:
+        action = "BUY"
+    elif sell_pct > 0:
+        action = "SELL"
+    else:
+        action = "HOLD"
+    return {
+        "target_pct": target,
+        "previous_target_pct": previous_target,
+        "buy_pct": buy_pct,
+        "sell_pct": sell_pct,
+        "action": action,
+    }
+
+
 def valuation_score(
     value: float | None,
     center: float | None = None,

@@ -8,7 +8,11 @@ from src.analytics.indicators import (
     calculate_indicator_series,
     calculate_technical_indicators,
 )
-from src.analytics.scoring import BTCAcumulationScorer
+from src.analytics.scoring import (
+    BTCAcumulationScorer,
+    allocation_pct,
+    allocation_signal,
+)
 from src.fetchers.btc_binance import BTCFetcher
 from src.fetchers.fear_greed import FearGreedFetcher
 from src.fetchers.fred_m2 import FREDFetcher
@@ -30,7 +34,8 @@ def _optional_float(value) -> float | None:
         return None
     return None if pd.isna(result) else result
 
-# Buy action per score zone (share of the planned monthly investment to deploy).
+# Coarse action label per zone. The continuous buy/sell percentage comes from
+# scoring.allocation_pct (0% at score 30, 100% at score 70).
 ZONE_ACTION = {
     "High accumulation zone": ("COMPRA FUERTE", 1.0),
     "Moderate accumulation zone": ("COMPRA NORMAL (DCA)", 0.5),
@@ -84,9 +89,28 @@ def _latest_stored_trends(
     return None
 
 
+def _previous_stored_score(db: DatabaseManager, date_value) -> float | None:
+    """Latest stored score strictly before ``date_value`` (the prior position)."""
+    history = db.load_latest_metrics(limit=30)
+    if history.empty or "total_score" not in history.columns:
+        return None
+    history["date"] = pd.to_datetime(history["date"], errors="coerce")
+    target = pd.to_datetime(date_value, errors="coerce")
+    if pd.isna(target):
+        return None
+    prior = history[history["date"] < target]
+    if prior.empty:
+        return None
+    return _optional_float(prior.sort_values("date").iloc[-1]["total_score"])
+
+
 def _print_report(db: DatabaseManager, record: dict, score_result: dict) -> None:
     zone = score_result["zone"]
-    action, ratio = ZONE_ACTION[zone]
+    action, _ = ZONE_ACTION[zone]
+    target_pct = allocation_pct(score_result["score"])
+    signal = allocation_signal(
+        score_result["score"], _previous_stored_score(db, record["date"])
+    )
 
     top = sorted(
         score_result["components"].items(), key=lambda item: -item[1]
@@ -113,12 +137,32 @@ def _print_report(db: DatabaseManager, record: dict, score_result: dict) -> None
     )
 
     print("\n=== Posibles Compras ===")
-    amount = MONTHLY_EXAMPLE * ratio
     print(f"[+] Acción recomendada: {action}")
-    print(
-        f"[+] Invertir ahora {ratio:.0%} del monto mensual "
-        f"(~${amount:,.0f} de ${MONTHLY_EXAMPLE:,.0f})"
-    )
+    if target_pct is None:
+        print("[+] Asignación objetivo: sin datos suficientes")
+    else:
+        amount = MONTHLY_EXAMPLE * target_pct / 100
+        print(
+            f"[+] Asignación objetivo: {target_pct:.0f}% del capital en BTC "
+            f"(~${amount:,.0f} de ${MONTHLY_EXAMPLE:,.0f})"
+        )
+        if signal["action"] == "BUY":
+            print(
+                f"[+] Señal: COMPRAR {signal['buy_pct']:.0f}% del capital "
+                f"(objetivo {signal['target_pct']:.0f}% vs "
+                f"{signal['previous_target_pct'] or 0:.0f}% previo)"
+            )
+        elif signal["action"] == "SELL":
+            print(
+                f"[+] Señal: VENDER {signal['sell_pct']:.0f}% del capital "
+                f"(objetivo {signal['target_pct']:.0f}% vs "
+                f"{signal['previous_target_pct'] or 0:.0f}% previo)"
+            )
+        else:
+            print(
+                f"[+] Señal: MANTENER (objetivo {signal['target_pct']:.0f}%, "
+                "sin cambio frente al día previo)"
+            )
     stats = zone_history_stats(db, zone)
     if stats and "mean" in stats:
         print(

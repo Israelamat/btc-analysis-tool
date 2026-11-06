@@ -1,6 +1,11 @@
 import pytest
 
-from src.analytics.scoring import BTCAcumulationScorer
+from src.analytics.scoring import (
+    BTCAcumulationScorer,
+    allocation_pct,
+    allocation_ratio,
+    allocation_signal,
+)
 from src.config import Config
 
 
@@ -70,3 +75,22 @@ def test_low_coverage_caps_a_strong_call():
     assert strong_sell["raw_zone"] == "Selling zone"
     assert strong_sell["zone"] == "Neutral zone"
     assert strong_sell["low_confidence"] is True
+
+
+def test_allocation_is_anchored_to_the_zone_thresholds():
+    assert allocation_pct(0) == pytest.approx(0.0)
+    assert allocation_pct(30) == pytest.approx(0.0)
+    assert allocation_pct(50) == pytest.approx(50.0)
+    assert allocation_pct(70) == pytest.approx(100.0)
+    assert allocation_pct(100) == pytest.approx(100.0)
+    assert allocation_pct(None) is None
+    assert allocation_ratio(50) == pytest.approx(0.5)
+
+
+def test_allocation_signal_buys_and_sells_the_target_difference():
+    assert allocation_signal(50, 30)["buy_pct"] == pytest.approx(50.0)
+    assert allocation_signal(50, 30)["action"] == "BUY"
+    assert allocation_signal(30, 50)["sell_pct"] == pytest.approx(50.0)
+    assert allocation_signal(30, 50)["action"] == "SELL"
+    assert allocation_signal(50, 50)["action"] == "HOLD"
+    assert allocation_signal(50, None)["buy_pct"] == pytest.approx(50.0)

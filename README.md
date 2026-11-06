@@ -183,7 +183,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-> Fetches data → computes indicators → scores → saves to SQLite → prints the market summary and the **possible buys** (recommended share of your monthly investment for the current zone).
+> Fetches data → computes indicators → scores → saves to SQLite → prints the market summary and the **possible buys** (target share of capital to hold in BTC and how much to buy/sell versus the previous day's target).
 > All the pipeline logic lives in `src/fetchers/pipeline.py`.
 
 ### Test a single fetcher (dev mode)
@@ -317,7 +317,9 @@ source), `config`, `backtest` (forward return per zone and horizon + correlation
                   "ema_200": 5, "fear_greed": 30, "rsi": 12,
                   "proxy_mvrv": 39, "proxy_nupl": 42 },
   "zone_history": { "n": 1667, "mean": 14.87, "win": 55.97 },
-  "action": "COMPRA NORMAL (DCA)", "ratio": 0.5, "source": "stored"
+  "action": "COMPRA NORMAL (DCA)", "ratio": 0.825,
+  "target_allocation_pct": 82.5, "previous_score": 60.0,
+  "buy_pct": 7.5, "sell_pct": 0.0, "signal": "BUY", "source": "stored"
 }
 ```
 
@@ -405,7 +407,35 @@ Unrealized      10          50.0              2.2                4.0      25.6  
 `Realized` = a High-accumulation buy closed at the first later Selling-zone episode.
 `Unrealized` = a buy still open, marked to the latest close. `win_rate_pct` is the
 share of trades with a positive return.
-forward returns (per signal and per score bin) — the tool used to set the current weights:
+
+#### Capital performance output
+
+The last block shows the **capital-compounding** result with a continuous position
+size instead of all-in/all-out. The target share of capital in BTC is 0% at score
+30, 100% at score 70 and linear in between, so the portfolio rebalances daily to
+the *previous* day's target (buying the difference when the target rises, selling
+it when it falls). It is compared against buy & hold from the same start date:
+
+```text
+=== Capital performance: score-scaled allocation vs buy & hold ===
+Initial capital: $10,000. The target share of capital is 0% at score 30, 100% at score 70 (linear in between); the position is rebalanced daily to the previous day's target.
+               strategy  final_capital   profit  total_return_pct  cagr_pct  max_drawdown_pct  exposure_pct  avg_allocation_pct  buy_days  sell_days  rebalances
+Score-scaled allocation        23108.0  13108.0             131.1       9.6             -63.2          45.6                45.6       958        994        1952
+             Buy & hold       163503.0 153503.0            1535.0      35.6             -83.2         100.0               100.0         1          0           1
+- Score-scaled allocation: $23,108 final, +$13,108 profit, +131.1% total, 9.6% CAGR, -63.2% max drawdown
+- Buy & hold: $163,503 final, +$153,503 profit, +1535.0% total, 35.6% CAGR, -83.2% max drawdown
+```
+
+This separates the two questions: the per-trade playbook reports the win rate and
+mean return of each episode, while the capital table reports what a single
+compounded portfolio actually earned. In this sample the score-scaled allocation
+underperforms buy & hold on total return but with a smaller drawdown, because its
+average exposure is only ~46% of capital.
+
+#### Calibration
+
+`calibrate` reports per-component correlation with forward returns (per signal and
+per score bin) — the tool used to set the current weights:
 
 ```bash
 python -m src.analytics.calibrate

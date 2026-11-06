@@ -7,7 +7,8 @@ Project context for AI assistants (opencode, Claude, Cursor, etc.). Read this fi
 A **Bitcoin accumulation analysis tool**. It fetches market data from public APIs
 (Binance, Alternative.me, FRED, Yahoo Finance, Google Trends), runs light analytics,
 computes a **BTC accumulation score (0–100)** and prints a **"possible buys"** report:
-how much of the monthly investment to deploy based on the current score zone.
+the target share of capital in BTC and the buy/sell percentage implied by the
+score (0% at score 30, 100% at score 70, linear in between).
 
 Designed to be run from `python main.py` (thin entry). All pipeline logic lives in
 `src/fetchers/pipeline.py`, inside the fetchers layer.
@@ -90,6 +91,15 @@ It also returns `coverage` (= Σw of the available signals, 1.0 = all present),
 `coverage < Config.COVERAGE_MIN` (default 0.5, env `COVERAGE_MIN`) the zone is
 capped — High → Moderate, Selling → Neutral — so a couple of weak signals
 cannot trigger a strong buy/sell. `metrics_history` stores the daily `coverage`.
+
+**Capital allocation:** `scoring.allocation_pct(score)` maps the score to the
+target share of capital in BTC (0% at score 30, 100% at 70, linear; env
+`ALLOCATION_FLOOR`/`ALLOCATION_CEILING`). `allocation_signal(score, previous)`
+turns the change between two targets into `buy_pct`/`sell_pct` (share of total
+capital). The console report and the API (`/api/refresh`, `/api/dashboard`)
+expose `target_allocation_pct`, `buy_pct`, `sell_pct` and `signal`; the backtest
+capital block rebalances daily to the *previous* day's target instead of
+trading all-in/all-out.
 
 | Component | Weight | Meaning of high value |
 |-----------|-------:|------------------------|
@@ -252,7 +262,15 @@ Use `--long-term` to skip the 30/90d tables and print only the 365/730d cycle vi
 `--long-term --independent` also restricts bootstrap/episodes to 365/730d. Every run
 ends with a **cycle playbook**: one buy per High episode, sold at the first later
 Selling episode; open buys are marked to the latest close. It shows realized and
-unrealized trades, win rate and mean/median returns.
+unrealized trades, win rate and mean/median returns. A final **capital performance**
+block no longer trades all-in/all-out: it rebalances daily to a score-derived
+target allocation (0% of capital at score 30, 100% at score 70, linear in between)
+using the *previous* day's score, and compares the compounded outcome against buy
+& hold from the same start date. It reports final capital, profit, total return,
+CAGR, max drawdown, average exposure, average target allocation, buy/sell days and
+rebalances. On the current sample the score-scaled allocation ends at ~$23.1k from
+$10k (+131.1%, 9.6% CAGR, -63.2% max DD), versus buy & hold ~$163.5k (+1535.0%,
+35.6% CAGR, -83.2% max DD): per-trade win rate is not portfolio return.
 
 Key results: correlation grows with horizon (730d +0.39, stable; 365d +0.18,
 unstable after 2022). At 730d, High accumulation has a +378% mean and 97% win rate

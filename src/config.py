@@ -25,6 +25,12 @@ class Config:
     # Neutral) so a couple of weak signals cannot label a strong buy or sell.
     COVERAGE_MIN: float = float(os.getenv("COVERAGE_MIN", "0.5"))
 
+    # Score anchors for the target capital allocation: at or below the floor the
+    # target is 0% of capital in BTC, at or above the ceiling it is 100%, and
+    # linear in between. Anchored to the zone thresholds (30/70).
+    ALLOCATION_FLOOR: float = float(os.getenv("ALLOCATION_FLOOR", "30"))
+    ALLOCATION_CEILING: float = float(os.getenv("ALLOCATION_CEILING", "70"))
+
     # Symmetric 0-100 transform shared by the accumulation score and the
     # /api/valuation display: the ratio that maps to the neutral 50, and the
     # span (ratio units) from the center to saturation at 0/100.

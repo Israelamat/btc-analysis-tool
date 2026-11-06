@@ -5,6 +5,7 @@ import pytest
 from src.analytics.backtest import (
     CYCLE_HORIZONS,
     build_parser,
+    capital_performance_table,
     correlation_table,
     cycle_playbook_table,
     episode_evidence_table,
@@ -179,6 +180,30 @@ def test_cycle_playbook_pairs_high_with_next_selling():
     assert realized["mean_return_pct"] == pytest.approx(20.0)
     assert unrealized["trades"] == 1
     assert unrealized["mean_return_pct"] == pytest.approx(10.0)
+
+
+def test_capital_performance_rebalances_to_the_score_allocation():
+    dates = pd.date_range("2024-01-01", periods=4, freq="D")
+    klines = pd.DataFrame({"close": [100, 100, 100, 200]}, index=dates)
+    metrics = pd.DataFrame(
+        {
+            "date": dates,
+            "total_score": [0.0, 50.0, 100.0, 100.0],
+        }
+    )
+
+    table = capital_performance_table(metrics, klines, initial_capital=1000.0)
+
+    strategy = table[table["strategy"] == "Score-scaled allocation"].iloc[0]
+    benchmark = table[table["strategy"] == "Buy & hold"].iloc[0]
+    assert strategy["final_capital"] == pytest.approx(1500.0)
+    assert strategy["profit"] == pytest.approx(500.0)
+    assert strategy["total_return_pct"] == pytest.approx(50.0)
+    assert strategy["buy_days"] == 2
+    assert strategy["sell_days"] == 0
+    assert strategy["avg_allocation_pct"] == pytest.approx(50.0)
+    assert benchmark["final_capital"] == pytest.approx(2000.0)
+    assert benchmark["total_return_pct"] == pytest.approx(100.0)
 
 
 def test_parser_exposes_long_term_flag():

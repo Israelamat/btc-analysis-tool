@@ -13,6 +13,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from src.analytics.scoring import allocation_ratio
 from src.storage.db_manager import DatabaseManager
 from src.utils.logger import setup_logger
 
@@ -31,6 +32,7 @@ CYCLE_SPLIT = "2022-01-01"
 DCA_CONTRIBUTION = 1000.0
 DCA_MULTIPLIER_MIN = 0.5
 DCA_MULTIPLIER_MAX = 1.5
+INITIAL_CAPITAL = 10000.0
 ZONE_BUCKETS = (
     (70.0, "High accumulation zone"),
     (50.0, "Moderate accumulation zone"),
@@ -479,6 +481,172 @@ def playbook_validation(
         )
 
 
+def _allocation_targets(
+    metrics: pd.DataFrame, prices: pd.DatetimeIndex
+) -> pd.Series:
+    """Target allocation (0-1) for each price date, using the prior score.
+
+    The previous day's score sets today's target, so the rebalance never peeks
+    at the close it executes on. Dates before the first score stay ``NaN``
+    (no signal, stay in cash).
+    """
+    frame = metrics[["date", "total_score"]].copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame.dropna(subset=["date", "total_score"])
+    frame = frame.sort_values("date").drop_duplicates("date", keep="last")
+    scores = frame.set_index("date")["total_score"].astype(float)
+    aligned = scores.reindex(prices, method="ffill").shift(1)
+    return aligned.apply(
+        lambda value: allocation_ratio(value) if pd.notna(value) else np.nan
+    )
+
+
+def capital_performance_table(
+    metrics: pd.DataFrame,
+    klines: pd.DataFrame,
+    initial_capital: float = INITIAL_CAPITAL,
+) -> pd.DataFrame:
+    """Daily rebalancing to the score-derived target allocation.
+
+    Instead of buying/selling the whole position at zone changes, the target
+    share of capital (0% at score 30, 100% at score 70, linear in between) is
+    rebalanced every day using the previous day's score: the difference is
+    bought when the target rises and sold when it falls. The compounded result
+    is compared against buy & hold from the same start date.
+    """
+    if metrics.empty or klines.empty:
+        return pd.DataFrame()
+    if not {"date", "total_score"}.issubset(metrics.columns):
+        return pd.DataFrame()
+
+    close = klines["close"].astype(float).dropna().sort_index()
+    scores = pd.to_datetime(
+        metrics["date"], errors="coerce"
+    ).dropna()
+    if close.empty or scores.empty:
+        return pd.DataFrame()
+
+    start = scores.min()
+    prices = close[close.index >= start]
+    if prices.empty:
+        return pd.DataFrame()
+
+    targets = _allocation_targets(metrics, prices.index)
+    if targets.dropna().empty:
+        return pd.DataFrame()
+
+    cash = initial_capital
+    units = 0.0
+    buy_days = 0
+    sell_days = 0
+    investments = []
+    allocations = []
+    equity = []
+    for date, price in prices.items():
+        price = float(price)
+        target = targets.loc[date]
+        equity_value = cash + units * price
+        if pd.notna(target):
+            desired = float(target) * equity_value
+            current = units * price
+            trade = desired - current
+            if trade > 1e-9 and cash > 0:
+                buy = min(trade, cash)
+                units += buy / price
+                cash -= buy
+                buy_days += 1
+            elif trade < -1e-9 and units > 0:
+                sell = min(-trade, current)
+                units -= sell / price
+                cash += sell
+                sell_days += 1
+            allocations.append(float(target) * 100)
+        equity_value = cash + units * price
+        equity.append(equity_value)
+        investments.append((units * price / equity_value) if equity_value else 0.0)
+
+    equity_series = pd.Series(equity, index=prices.index, dtype=float)
+    final_capital = float(equity_series.iloc[-1])
+    total_return = (final_capital / initial_capital - 1) * 100
+    max_drawdown = float((equity_series / equity_series.cummax() - 1).min() * 100)
+    days = max((prices.index[-1] - prices.index[0]).days, 1)
+    cagr = ((final_capital / initial_capital) ** (365 / days) - 1) * 100
+    exposure = float(np.mean(investments)) * 100 if investments else 0.0
+    avg_allocation = float(np.mean(allocations)) if allocations else np.nan
+
+    buy_hold_units = initial_capital / float(prices.iloc[0])
+    buy_hold_equity = buy_hold_units * prices
+    buy_hold_final = float(buy_hold_equity.iloc[-1])
+    buy_hold_return = (buy_hold_final / initial_capital - 1) * 100
+    buy_hold_drawdown = float(
+        (buy_hold_equity / buy_hold_equity.cummax() - 1).min() * 100
+    )
+    buy_hold_cagr = (
+        (buy_hold_final / initial_capital) ** (365 / days) - 1
+    ) * 100
+
+    return pd.DataFrame(
+        [
+            {
+                "strategy": "Score-scaled allocation",
+                "final_capital": round(final_capital, 0),
+                "profit": round(final_capital - initial_capital, 0),
+                "total_return_pct": round(total_return, 1),
+                "cagr_pct": round(cagr, 1),
+                "max_drawdown_pct": round(max_drawdown, 1),
+                "exposure_pct": round(exposure, 1),
+                "avg_allocation_pct": (
+                    round(avg_allocation, 1) if not np.isnan(avg_allocation) else np.nan
+                ),
+                "buy_days": buy_days,
+                "sell_days": sell_days,
+                "rebalances": buy_days + sell_days,
+            },
+            {
+                "strategy": "Buy & hold",
+                "final_capital": round(buy_hold_final, 0),
+                "profit": round(buy_hold_final - initial_capital, 0),
+                "total_return_pct": round(buy_hold_return, 1),
+                "cagr_pct": round(buy_hold_cagr, 1),
+                "max_drawdown_pct": round(buy_hold_drawdown, 1),
+                "exposure_pct": 100.0,
+                "avg_allocation_pct": 100.0,
+                "buy_days": 1,
+                "sell_days": 0,
+                "rebalances": 1,
+            },
+        ]
+    )
+
+
+def capital_validation(
+    metrics: pd.DataFrame, klines: pd.DataFrame
+) -> None:
+    """Print the compounded capital result against buy and hold."""
+    print("\n=== Capital performance: score-scaled allocation vs buy & hold ===")
+    print(
+        f"Initial capital: ${INITIAL_CAPITAL:,.0f}. The target share of capital "
+        "is 0% at score 30, 100% at score 70 (linear in between); the position "
+        "is rebalanced daily to the previous day's target."
+    )
+    table = capital_performance_table(metrics, klines)
+    if table.empty:
+        print("Not enough cycle history for a capital comparison")
+        return
+
+    print(table.to_string(index=False))
+    for _, row in table.iterrows():
+        profit = float(row["profit"])
+        profit_text = f"+${profit:,.0f}" if profit >= 0 else f"-${abs(profit):,.0f}"
+        print(
+            f"- {row['strategy']}: ${row['final_capital']:,.0f} final, "
+            f"{profit_text} profit, "
+            f"{row['total_return_pct']:+.1f}% total, "
+            f"{row['cagr_pct']:.1f}% CAGR, "
+            f"{row['max_drawdown_pct']:.1f}% max drawdown"
+        )
+
+
 def independent_table(
     metrics: pd.DataFrame,
     klines: pd.DataFrame,
@@ -854,6 +1022,7 @@ def run_backtest(
         )
 
     playbook_validation(metrics, klines)
+    capital_validation(metrics, klines)
 
     if csv_path:
         metrics.to_csv(csv_path, index=False)

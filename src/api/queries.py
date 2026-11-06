@@ -11,7 +11,13 @@ from src.analytics.backtest import (
     summarize,
 )
 from src.analytics.calibrate import collect_calibration
-from src.analytics.scoring import BTCAcumulationScorer, valuation_score
+from src.analytics.scoring import (
+    BTCAcumulationScorer,
+    allocation_pct,
+    allocation_ratio,
+    allocation_signal,
+    valuation_score,
+)
 from src.api.cache import TTLCache
 from src.api.params import DEFAULT_LIMIT
 from src.api.serializers import date_str, jsonable, records
@@ -323,18 +329,45 @@ def _optional_int(value) -> int | None:
     return None if number is None else int(round(number))
 
 
-def report_from_record(record: dict, components: dict | None = None) -> dict:
+def _previous_score(date_value) -> float | None:
+    """Latest stored score strictly before ``date_value`` (the prior position)."""
+    history = get_db().load_latest_metrics(limit=30)
+    if history.empty or "total_score" not in history.columns:
+        return None
+    history["date"] = pd.to_datetime(history["date"], errors="coerce")
+    target = pd.to_datetime(date_value, errors="coerce")
+    if pd.isna(target):
+        return None
+    prior = history[history["date"] < target]
+    if prior.empty:
+        return None
+    return _optional_number(prior.sort_values("date").iloc[-1]["total_score"])
+
+
+def report_from_record(
+    record: dict,
+    components: dict | None = None,
+    previous_score: float | None = None,
+) -> dict:
     """Build the dashboard report contract from a plain record dict.
 
     Accepts both a stored ``metrics_history`` row and a live pipeline record.
+    The buy/sell percentages compare this score's target allocation with the
+    previous stored score's target (the prior position).
 
     :param record: mapping with the metrics columns
     :param components: per-signal scores; parsed from the record when omitted
+    :param previous_score: score of the prior row; looked up when omitted
     """
     zone = str(jsonable(record.get("zone")) or "")
-    action, ratio = ZONE_ACTION.get(zone, ("NO ACTION DEFINED", 0.0))
+    action, zone_ratio = ZONE_ACTION.get(zone, ("NO ACTION DEFINED", 0.0))
     scores = components or _components_from_row(record)
     coverage = _optional_number(record.get("coverage"))
+    score = _optional_number(record.get("total_score"))
+    if previous_score is None:
+        previous_score = _previous_score(record.get("date"))
+    signal = allocation_signal(score, previous_score)
+    target_ratio = allocation_ratio(score)
     return {
         "date": date_str(record.get("date")),
         "btc_price": _number(record.get("btc_price")),
@@ -355,7 +388,12 @@ def report_from_record(record: dict, components: dict | None = None) -> dict:
             None if coverage is None else coverage < Config.COVERAGE_MIN
         ),
         "action": action,
-        "ratio": ratio,
+        "ratio": target_ratio if target_ratio is not None else zone_ratio,
+        "target_allocation_pct": signal["target_pct"],
+        "previous_score": previous_score,
+        "buy_pct": signal["buy_pct"],
+        "sell_pct": signal["sell_pct"],
+        "signal": signal["action"],
         "zone_history": jsonable(_zone_history(zone)) if zone else None,
     }
 
@@ -601,7 +639,14 @@ def zone_context(transitions: int = 8) -> dict | None:
     last = frame.iloc[-1]
     zone = str(last.get("zone") or "")
     score = _optional_number(last.get("total_score"))
-    action, ratio = ZONE_ACTION.get(zone, ("NO ACTION DEFINED", 0.0))
+    action, zone_ratio = ZONE_ACTION.get(zone, ("NO ACTION DEFINED", 0.0))
+    previous_score = (
+        _optional_number(frame.iloc[-2].get("total_score"))
+        if len(frame) > 1
+        else None
+    )
+    signal = allocation_signal(score, previous_score)
+    target_ratio = allocation_ratio(score)
     current = runs.iloc[-1]
     changes = _transitions_from_runs(runs)
 
@@ -611,7 +656,12 @@ def zone_context(transitions: int = 8) -> dict | None:
             "zone": zone,
             "score": _optional_int(score),
             "action": action,
-            "ratio": ratio,
+            "ratio": target_ratio if target_ratio is not None else zone_ratio,
+            "target_allocation_pct": signal["target_pct"],
+            "previous_score": previous_score,
+            "buy_pct": signal["buy_pct"],
+            "sell_pct": signal["sell_pct"],
+            "signal": signal["action"],
             "streak_days": int(current["days"] or 0),
             "streak_start": date_str(current["start"]),
             "zone_history": jsonable(_zone_history(zone)) if zone else None,
@@ -848,23 +898,47 @@ def model_config() -> dict:
     """Weights, zone thresholds and buy actions of the scoring model."""
     weights = dict(BTCAcumulationScorer().weights)
     zones = []
-    for threshold, label in ZONE_BUCKETS:
-        action, ratio = ZONE_ACTION.get(label, ("NO ACTION DEFINED", 0.0))
+    actions = {}
+    for index, (threshold, label) in enumerate(ZONE_BUCKETS):
+        action, _ = ZONE_ACTION.get(label, ("NO ACTION DEFINED", 0.0))
+        upper = ZONE_BUCKETS[index - 1][0] if index > 0 else 100.0
+        representative = (
+            max(min(upper / 2, upper), 0.0)
+            if threshold == float("-inf")
+            else (threshold + upper) / 2
+        )
+        ratio = allocation_ratio(representative) or 0.0
         zones.append(
             {
                 "zone": label,
                 "min_score": None if threshold == float("-inf") else threshold,
                 "action": action,
                 "ratio": ratio,
+                "target_allocation_pct": round(ratio * 100, 1),
             }
         )
+        actions[label] = {"action": action, "ratio": ratio}
 
     return {
         "weights": weights,
         "zones": zones,
-        "actions": {
-            zone: {"action": action, "ratio": ratio}
-            for zone, (action, ratio) in ZONE_ACTION.items()
+        "actions": actions,
+        "allocation": {
+            "floor_score": Config.ALLOCATION_FLOOR,
+            "ceiling_score": Config.ALLOCATION_CEILING,
+            "formula": (
+                "target_pct = clamp((score - floor) / (ceiling - floor) * 100, 0, 100)"
+            ),
+            "anchors": [
+                {
+                    "score": threshold if threshold != float("-inf") else None,
+                    "zone": label,
+                    "target_allocation_pct": allocation_pct(
+                        None if threshold == float("-inf") else max(threshold, 0.0)
+                    ),
+                }
+                for threshold, label in ZONE_BUCKETS
+            ],
         },
         "components": [
             {
